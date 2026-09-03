@@ -1,0 +1,47 @@
+# FPGA/EDA generated outputs
+**/db/
+**/incremental_db/
+**/simulation/modelsim/
+**/simulation/.regression/
+**/output_files/*.rpt
+**/output_files/*.summary
+**/output_files/*.qws
+**/output_files/*.done
+**/output_files/*.smsg
+**/output_files/*.pin
+**/output_files/*.qdf
+**/output_files/*.sta.rpt
+**/output_files/*.fit.rpt
+**/output_files/*.map.rpt
+**/output_files/*.asm.rpt
+**/output_files/*.flow.rpt
+**/output_files/*.jdi
+**/output_files/*.sof
+
+# STM32/IDE generated outputs
+**/Debug/*.o
+**/Debug/*.d
+**/Debug/*.su
+**/Debug/*.cyclo
+**/Debug/*.list
+**/Debug/*.map
+**/Debug/*.elf
+**/Debug/makefile
+**/Debug/objects.list
+**/Debug/objects.mk
+**/Debug/sources.mk
+**/.settings/
+**/.metadata/
+
+# Workspace-generated temporary data
+tmp/
+.codex_tmp/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Local credentials/config overrides
+*secret*
+*api_key*
+*.local

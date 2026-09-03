@@ -1,0 +1,58 @@
+{
+  "seed": "0x2F5C2026",
+  "sample_count": 5376,
+  "metric_count": 103,
+  "segments": [
+    {
+      "name": "idle_noise",
+      "start": 0,
+      "end": 576,
+      "stable_start": 480,
+      "expected_bit": null
+    },
+    {
+      "name": "f0_ideal",
+      "start": 576,
+      "end": 1536,
+      "stable_start": 1056,
+      "expected_bit": 0
+    },
+    {
+      "name": "f1_ideal",
+      "start": 1536,
+      "end": 2496,
+      "stable_start": 2016,
+      "expected_bit": 1
+    },
+    {
+      "name": "f0_plus_20_hz",
+      "start": 2496,
+      "end": 3456,
+      "stable_start": 2976,
+      "expected_bit": 0
+    },
+    {
+      "name": "f1_minus_20_hz",
+      "start": 3456,
+      "end": 4416,
+      "stable_start": 3936,
+      "expected_bit": 1
+    },
+    {
+      "name": "f0_near_full_scale",
+      "start": 4416,
+      "end": 5376,
+      "stable_start": 4896,
+      "expected_bit": 0
+    }
+  ],
+  "last_metric": {
+    "accepted_sample": 5376,
+    "energy_f0": 214562890,
+    "energy_f1": 0,
+    "soft_metric": -214562890,
+    "total_energy": 214562890,
+    "confidence": 255,
+    "hard_bit": 0
+  }
+}
