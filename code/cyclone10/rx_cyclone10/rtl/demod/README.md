@@ -1,5 +1,16 @@
 # Task 4 Fixed-Point Contract
 
+## Tone configuration
+
+Bit 0 is 1700 Hz and bit 1 is 1900 Hz at 48 kSPS and 100 bit/s.
+The 480-entry Q1.15 ROM contains 17 and 19 cycles respectively; its phase
+counter is 9 bits and wraps at 479. The 480-sample integration window and
+48-sample metric cadence are unchanged. Regenerate TX/RX tables with
+`python tools/gen_fsk_tones.py` from the repository root, then regenerate
+correlator fixtures with `python tools/gen_correlator_vectors.py`.
+The resource counts below describe the older 1600/2000 Hz implementation;
+new timing and resource use require a fresh Quartus build.
+
 ## Interface
 
 `fsk_demod_core` is the integration entry point in the 30 MHz `clk_sys`

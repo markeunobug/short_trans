@@ -1,0 +1,469 @@
+{
+  "schema_version": 1,
+  "generator": "tools/gen_ook_validation_vectors.py",
+  "parameters": {
+    "sample_rate_hz": 48000,
+    "bit_rate_bps": 100,
+    "samples_per_symbol": 480,
+    "carrier_hz": 1800,
+    "carrier_lut_samples": 80,
+    "carrier_lut_cycles": 3,
+    "adc_amplitude": 80,
+    "gap_samples": 4800,
+    "low_threshold": 400,
+    "high_threshold": 600,
+    "energy_expression": "(I*I+Q*Q)>>28",
+    "iq_coefficients": "Q7 round(127*cos/sin(2*pi*3*n/80))",
+    "steady_carrier_energy_min": 616,
+    "steady_carrier_energy_max": 616
+  },
+  "sample_format": "signed 20-bit two's-complement; one five-hex-digit word per line",
+  "scenarios": [
+    {
+      "name": "payload_64_zero",
+      "files": {
+        "samples_i20_mem": "payload_64_zero.samples_i20.mem"
+      },
+      "sha256": "3290132c2f1cd63dd543a52682fddefd06701e3fe511a7cbc41ef48351d2d811",
+      "sample_count": 305280,
+      "metric_energy_min_nonzero": 87,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 300480,
+          "carrier_phase_samples": 0,
+          "start_offset_samples": 0,
+          "frame_hex": "AAAA06B720004084000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 0,
+          "type": "DATA",
+          "timestamp": 0,
+          "payload_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    },
+    {
+      "name": "payload_64_ff",
+      "files": {
+        "samples_i20_mem": "payload_64_ff.samples_i20.mem"
+      },
+      "sha256": "e3dec76fb0211831cad01f8b21fb9cd10d261d281dc620310fafb76112b0af8b",
+      "sample_count": 305292,
+      "metric_energy_min_nonzero": 10,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 300492,
+          "carrier_phase_samples": 20,
+          "start_offset_samples": 12,
+          "frame_hex": "AAAA06B720014091000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF1C04"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 1,
+          "type": "DATA",
+          "timestamp": 0,
+          "payload_hex": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+        }
+      ]
+    },
+    {
+      "name": "payload_random",
+      "files": {
+        "samples_i20_mem": "payload_random.samples_i20.mem"
+      },
+      "sha256": "0e0ebb647b5f8253f6a9c9e6cf1d9007e71304a9e2d954a7b6a2a56bacae4a05",
+      "sample_count": 90264,
+      "metric_energy_min_nonzero": 8,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 85464,
+          "carrier_phase_samples": 40,
+          "start_offset_samples": 24,
+          "frame_hex": "AAAA06B7200208510000009D02F04CB1773AE6972C"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 2,
+          "type": "DATA",
+          "timestamp": 0,
+          "payload_hex": "9D02F04CB1773AE6"
+        }
+      ]
+    },
+    {
+      "name": "bad_crc_followed_by_good",
+      "files": {
+        "samples_i20_mem": "bad_crc_followed_by_good.samples_i20.mem"
+      },
+      "sha256": "e10f5c685fba35bbb467247fd098f18cc634ea913d04bb9e964a0be8a5bbf0da",
+      "sample_count": 145044,
+      "metric_energy_min_nonzero": 107,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 70116,
+          "carrier_phase_samples": 60,
+          "start_offset_samples": 36,
+          "frame_hex": "AAAA06B72040040400000042414421C3CE"
+        },
+        {
+          "offset_samples": 70116,
+          "length_samples": 70128,
+          "carrier_phase_samples": 0,
+          "start_offset_samples": 48,
+          "frame_hex": "AAAA06B720410411000000474F4F449E3D"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": false,
+          "reason": "CRC16",
+          "sequence": 64
+        },
+        {
+          "valid": true,
+          "sequence": 65,
+          "type": "DATA",
+          "timestamp": 0,
+          "payload_hex": "474F4F44"
+        }
+      ]
+    },
+    {
+      "name": "time_base_then_data",
+      "files": {
+        "samples_i20_mem": "time_base_then_data.samples_i20.mem"
+      },
+      "sha256": "d0cb3c602400cb034abdbaff6a4ee8c170c5f426f38f22caf37d2abf2b9ebe38",
+      "sample_count": 133572,
+      "metric_energy_min_nonzero": 10,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 58620,
+          "carrier_phase_samples": 20,
+          "start_offset_samples": 60,
+          "frame_hex": "AAAA06B7215000246AB15480CDE5"
+        },
+        {
+          "offset_samples": 58620,
+          "length_samples": 70152,
+          "carrier_phase_samples": 40,
+          "start_offset_samples": 72,
+          "frame_hex": "AAAA06B7205104460004D2012345672FD2"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 80,
+          "type": "TIME_BASE",
+          "timestamp": 1790006400,
+          "payload_hex": ""
+        },
+        {
+          "valid": true,
+          "sequence": 81,
+          "type": "DATA",
+          "timestamp": 1234,
+          "payload_hex": "01234567"
+        }
+      ]
+    },
+    {
+      "name": "phase_00_offset_000",
+      "files": {
+        "samples_i20_mem": "phase_00_offset_000.samples_i20.mem"
+      },
+      "sha256": "ee14bd6282a3377f843d8e457d8f75bb7c6a4ae69d0e2f4f57ef7e1e9ea47d10",
+      "sample_count": 63360,
+      "metric_energy_min_nonzero": 87,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 58560,
+          "carrier_phase_samples": 0,
+          "start_offset_samples": 0,
+          "frame_hex": "AAAA06B7206001B1000000A08D69"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 96,
+          "type": "DATA",
+          "timestamp": 0,
+          "payload_hex": "A0"
+        }
+      ]
+    },
+    {
+      "name": "phase_20_offset_012",
+      "files": {
+        "samples_i20_mem": "phase_20_offset_012.samples_i20.mem"
+      },
+      "sha256": "50220e7ae8cc05360231afa4c6f3e4e207554bfd771b6e1f75f9cf6f31bcd2e7",
+      "sample_count": 63372,
+      "metric_energy_min_nonzero": 10,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 58572,
+          "carrier_phase_samples": 20,
+          "start_offset_samples": 12,
+          "frame_hex": "AAAA06B7206101A4000001A13115"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 97,
+          "type": "DATA",
+          "timestamp": 1,
+          "payload_hex": "A1"
+        }
+      ]
+    },
+    {
+      "name": "phase_40_offset_024",
+      "files": {
+        "samples_i20_mem": "phase_40_offset_024.samples_i20.mem"
+      },
+      "sha256": "a19bdb5513fc137687ed98ede7de3ee03b866ecff27039b71ba1d369387a847d",
+      "sample_count": 63384,
+      "metric_energy_min_nonzero": 8,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 58584,
+          "carrier_phase_samples": 40,
+          "start_offset_samples": 24,
+          "frame_hex": "AAAA06B72062019B000002A2E5B0"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 98,
+          "type": "DATA",
+          "timestamp": 2,
+          "payload_hex": "A2"
+        }
+      ]
+    },
+    {
+      "name": "phase_60_offset_036",
+      "files": {
+        "samples_i20_mem": "phase_60_offset_036.samples_i20.mem"
+      },
+      "sha256": "eb65c3a9b00c6de6c7a14917c60a98d59bce08948bb3389ed392aa51de097747",
+      "sample_count": 63396,
+      "metric_energy_min_nonzero": 107,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 58596,
+          "carrier_phase_samples": 60,
+          "start_offset_samples": 36,
+          "frame_hex": "AAAA06B72063018E000003A359CC"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 99,
+          "type": "DATA",
+          "timestamp": 3,
+          "payload_hex": "A3"
+        }
+      ]
+    },
+    {
+      "name": "phase_00_offset_048",
+      "files": {
+        "samples_i20_mem": "phase_00_offset_048.samples_i20.mem"
+      },
+      "sha256": "6d0c9e2b0f34a89da2f760370f8db69f79252aff9168a76c06e789dfd7e9fea7",
+      "sample_count": 63408,
+      "metric_energy_min_nonzero": 87,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 58608,
+          "carrier_phase_samples": 0,
+          "start_offset_samples": 48,
+          "frame_hex": "AAAA06B7206401E5000004A45CDB"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 100,
+          "type": "DATA",
+          "timestamp": 4,
+          "payload_hex": "A4"
+        }
+      ]
+    },
+    {
+      "name": "phase_20_offset_060",
+      "files": {
+        "samples_i20_mem": "phase_20_offset_060.samples_i20.mem"
+      },
+      "sha256": "d91b83872ae370794b97fa035dc8c42889184d104d8c9c5a697e1b7e16701b66",
+      "sample_count": 63420,
+      "metric_energy_min_nonzero": 10,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 58620,
+          "carrier_phase_samples": 20,
+          "start_offset_samples": 60,
+          "frame_hex": "AAAA06B7206501F0000005A5E0A7"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 101,
+          "type": "DATA",
+          "timestamp": 5,
+          "payload_hex": "A5"
+        }
+      ]
+    },
+    {
+      "name": "phase_40_offset_072",
+      "files": {
+        "samples_i20_mem": "phase_40_offset_072.samples_i20.mem"
+      },
+      "sha256": "765b889f349c19a108dea65cbc1ea1a04ca30b5522d9de0259c3b8579272901b",
+      "sample_count": 63432,
+      "metric_energy_min_nonzero": 8,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 58632,
+          "carrier_phase_samples": 40,
+          "start_offset_samples": 72,
+          "frame_hex": "AAAA06B7206601CF000006A63402"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 102,
+          "type": "DATA",
+          "timestamp": 6,
+          "payload_hex": "A6"
+        }
+      ]
+    },
+    {
+      "name": "phase_60_offset_084",
+      "files": {
+        "samples_i20_mem": "phase_60_offset_084.samples_i20.mem"
+      },
+      "sha256": "79ef5bdd5a9b288a2b54cc9f7fefc413e8aa79ca7f67418e563cbdd267931d61",
+      "sample_count": 63444,
+      "metric_energy_min_nonzero": 107,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 58644,
+          "carrier_phase_samples": 60,
+          "start_offset_samples": 84,
+          "frame_hex": "AAAA06B7206701DA000007A7887E"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 103,
+          "type": "DATA",
+          "timestamp": 7,
+          "payload_hex": "A7"
+        }
+      ]
+    },
+    {
+      "name": "phase_00_offset_096",
+      "files": {
+        "samples_i20_mem": "phase_00_offset_096.samples_i20.mem"
+      },
+      "sha256": "54db0b2db02b0431fc937e55cb0256186218f3505a53272ec386fc60a0470c69",
+      "sample_count": 63456,
+      "metric_energy_min_nonzero": 87,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 58656,
+          "carrier_phase_samples": 0,
+          "start_offset_samples": 96,
+          "frame_hex": "AAAA06B720680119000008A83E2C"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 104,
+          "type": "DATA",
+          "timestamp": 8,
+          "payload_hex": "A8"
+        }
+      ]
+    },
+    {
+      "name": "phase_20_offset_108",
+      "files": {
+        "samples_i20_mem": "phase_20_offset_108.samples_i20.mem"
+      },
+      "sha256": "19bf86107824d78ef7e18080c88806c93a84e7621224dc7d44d0f9b3e65b83d5",
+      "sample_count": 63468,
+      "metric_energy_min_nonzero": 10,
+      "metric_energy_max": 616,
+      "frames": [
+        {
+          "offset_samples": 0,
+          "length_samples": 58668,
+          "carrier_phase_samples": 20,
+          "start_offset_samples": 108,
+          "frame_hex": "AAAA06B72069010C000009A98250"
+        }
+      ],
+      "expected_frames": [
+        {
+          "valid": true,
+          "sequence": 105,
+          "type": "DATA",
+          "timestamp": 9,
+          "payload_hex": "A9"
+        }
+      ]
+    }
+  ]
+}

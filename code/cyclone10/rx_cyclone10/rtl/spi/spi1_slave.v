@@ -17,6 +17,7 @@ module spi1_slave (
     output wire       spi_miso,
 
     output reg  [6:0] bus_address,
+    output reg        bus_read_preload,
     output reg        bus_read_strobe,
     input  wire [7:0] bus_read_data,
     output reg        bus_write_strobe,
@@ -62,7 +63,8 @@ module spi1_slave (
     assign nss_rise = nss_sync && !nss_prev;
     assign assembled_byte = {rx_shift[6:0], mosi_sync};
     assign next_read_address = ((current_address == 7'h40) ||
-                                (current_address == 7'h41)) ?
+                                (current_address == 7'h41) ||
+                                (current_address == 7'h42)) ?
                                current_address : current_address + 1'b1;
 
     // Raw NSS controls the output enable so deselection cannot be delayed by
@@ -94,6 +96,7 @@ module spi1_slave (
     always @(posedge clk_sys or negedge rst_sys_n) begin
         if (!rst_sys_n) begin
             bus_address       <= 7'd0;
+            bus_read_preload  <= 1'b0;
             bus_read_strobe   <= 1'b0;
             bus_write_strobe  <= 1'b0;
             bus_write_data    <= 8'd0;
@@ -108,6 +111,7 @@ module spi1_slave (
             tx_byte_loaded    <= 1'b0;
             miso_value        <= 1'b0;
         end else begin
+            bus_read_preload   <= 1'b0;
             bus_read_strobe    <= 1'b0;
             bus_write_strobe   <= 1'b0;
             spi_protocol_error <= 1'b0;
@@ -160,11 +164,13 @@ module spi1_slave (
                             current_address <= assembled_byte[6:0];
                             bus_address     <= assembled_byte[6:0];
                             if (assembled_byte[7]) begin
+                                bus_read_preload <= 1'b1;
                                 read_load_pending <= 1'b1;
                             end
                         end else if (read_mode) begin
                             current_address   <= next_read_address;
                             bus_address       <= next_read_address;
+                            bus_read_preload   <= 1'b1;
                             read_load_pending <= 1'b1;
                         end else begin
                             bus_address      <= current_address;

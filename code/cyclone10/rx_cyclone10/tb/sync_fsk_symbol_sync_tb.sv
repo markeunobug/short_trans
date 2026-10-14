@@ -283,16 +283,44 @@ module sync_fsk_symbol_sync_tb;
         end
     endtask
 
+    task automatic test_low_confidence_holds_lock;
+        integer metric_index;
+        integer outputs_before;
+        begin
+            expect_lock(5, 0, "low-confidence-hold");
+            outputs_before = output_count;
+
+            // Confidence describes bit-decision quality, not whether signal
+            // energy is present.  Sustained low confidence must therefore
+            // keep symbol lock while carrier_present remains asserted.
+            for (metric_index = 0; metric_index < 40; metric_index = metric_index + 1)
+                drive_metric(1'b1, 1'b1, 8'd0, 16'd2100);
+
+            repeat (2) @(posedge clk);
+            if (!sync_locked || lost_count != 0) begin
+                $error("low confidence incorrectly caused carrier loss: locked=%0b lost=%0d",
+                       sync_locked, lost_count);
+                errors = errors + 1;
+            end
+            if ((output_count - outputs_before) < 3) begin
+                $error("low-confidence hold emitted only %0d bits, expected at least 3",
+                       output_count - outputs_before);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
     initial begin
         expect_lock(2, 0, "random-start-offset-2");
         expect_lock(7, 2, "two-error-preamble");
         expect_lock(9, 0, "random-start-offset-9");
         test_three_error_rejection();
         test_timing_correction();
+        test_low_confidence_holds_lock();
         test_low_energy_loss();
 
         if (errors == 0) begin
-            $display("PASS: random phase, 0/2/3 preamble errors, early/late tracking, and low-energy loss verified");
+            $display("PASS: random phase, preamble errors, timing tracking, low-confidence hold, and low-energy loss verified");
             $finish;
         end else begin
             $fatal(1, "FAIL: %0d symbol synchronizer checks failed", errors);

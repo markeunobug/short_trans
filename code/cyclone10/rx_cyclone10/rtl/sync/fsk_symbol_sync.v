@@ -11,7 +11,7 @@ module fsk_symbol_sync #(
     parameter integer PREAMBLE_MIN_MATCHES = 14,
     parameter integer PREAMBLE_MIN_CARRIER_HITS = 14,
     parameter [CONFIDENCE_WIDTH-1:0] TIMING_HYSTERESIS = 8'd4,
-    parameter integer LOCK_TIMEOUT_SYMBOLS = 600
+    parameter integer LOCK_TIMEOUT_SYMBOLS = 100
 ) (
     input  wire                              clk,
     input  wire                              reset_n,

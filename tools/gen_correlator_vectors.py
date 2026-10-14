@@ -30,12 +30,12 @@ def q15(value: float) -> int:
 
 COEFFICIENTS = [
     (
-        q15(math.cos(2.0 * math.pi * n / 30.0)),
-        q15(math.sin(2.0 * math.pi * n / 30.0)),
-        q15(math.cos(2.0 * math.pi * n / 24.0)),
-        q15(math.sin(2.0 * math.pi * n / 24.0)),
+        q15(math.cos(2.0 * math.pi * 1700.0 * n / SAMPLE_RATE)),
+        q15(math.sin(2.0 * math.pi * 1700.0 * n / SAMPLE_RATE)),
+        q15(math.cos(2.0 * math.pi * 1900.0 * n / SAMPLE_RATE)),
+        q15(math.sin(2.0 * math.pi * 1900.0 * n / SAMPLE_RATE)),
     )
-    for n in range(120)
+    for n in range(480)
 ]
 
 
@@ -82,7 +82,7 @@ def reference_metrics(samples: list[int]) -> list[dict[str, int]]:
     metrics: list[dict[str, int]] = []
 
     for index, sample in enumerate(samples):
-        coeffs = COEFFICIENTS[index % 120]
+        coeffs = COEFFICIENTS[index % len(COEFFICIENTS)]
         products = [sample * coefficient for coefficient in coeffs]
         for lane in range(4):
             old_value = histories[lane][0]
@@ -147,11 +147,11 @@ def main() -> None:
     rng = random.Random(0x2F5C2026)
     segments: list[tuple[str, list[int], int | None]] = [
         ("idle_noise", [clip_sample(rng.gauss(0.0, 400.0)) for _ in range(576)], None),
-        ("f0_ideal", make_tone(960, 1600.0, 120_000.0, 0.37, 12_000.0, 100.0, rng), 0),
-        ("f1_ideal", make_tone(960, 2000.0, 150_000.0, -0.81, -8_000.0, 100.0, rng), 1),
-        ("f0_plus_20_hz", make_tone(960, 1620.0, 100_000.0, 1.17, 4_000.0, 2_500.0, rng), 0),
-        ("f1_minus_20_hz", make_tone(960, 1980.0, 100_000.0, -2.03, -3_000.0, 2_500.0, rng), 1),
-        ("f0_near_full_scale", make_tone(960, 1600.0, 500_000.0, 0.11, 0.0, 0.0, rng), 0),
+        ("f0_ideal", make_tone(960, 1700.0, 120_000.0, 0.37, 12_000.0, 100.0, rng), 0),
+        ("f1_ideal", make_tone(960, 1900.0, 150_000.0, -0.81, -8_000.0, 100.0, rng), 1),
+        ("f0_plus_20_hz", make_tone(960, 1720.0, 100_000.0, 1.17, 4_000.0, 2_500.0, rng), 0),
+        ("f1_minus_20_hz", make_tone(960, 1880.0, 100_000.0, -2.03, -3_000.0, 2_500.0, rng), 1),
+        ("f0_near_full_scale", make_tone(960, 1700.0, 500_000.0, 0.11, 0.0, 0.0, rng), 0),
     ]
 
     samples: list[int] = []

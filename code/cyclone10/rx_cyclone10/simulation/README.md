@@ -34,7 +34,7 @@ sample count, and SHA-256 digest.  Each scenario includes:
 - `*.bits.mem`: intended MSB-first symbol bits.
 - `*.frame.hex`: complete physical-frame bytes when the scenario is a frame.
 
-The default matrix covers fixed 1.6/2.0 kHz tones, alternating bits, random
+The default matrix covers fixed 1.7/1.9 kHz tones, alternating bits, random
 initial phase, three amplitudes, positive/negative/drifting DC, AWGN at 30,
 20, 10, and 0 dB, frequency offsets of 0, +/-5, +/-10, and +/-20 Hz, and a
 complete CRC-protected packet with a random sample start offset.  Samples are
@@ -67,5 +67,32 @@ payload; use `gen_fsk_vectors.py --payload-hex ...` to exercise another length.
 
 The integration bench deliberately begins at the documented 20-bit
 demodulator sample interface.  It does not cover the board I2S capture/CDC or
-the downstream frame FIFO/SPI path, and the current FPGA top level does not
-instantiate this RX chain.
+the downstream frame FIFO/SPI path, and is distinct from a full top-level or board test. The current FPGA top level
+selects the FSK/OOK chains and connects them to the frame parser/FIFO.
+
+
+## Mode 2 OOK tests
+
+Run from this FPGA project directory:
+
+```powershell
+python simulation/run_ook_vectors.py
+powershell -ExecutionPolicy Bypass -File simulation/run_ook_lifecycle.ps1
+powershell -ExecutionPolicy Bypass -File simulation/run_ook_spi_config.ps1
+```
+
+The vector runner checks 24 cases against CRC counts, frame metadata, timestamps and every payload
+byte, then replays the real STM32 TX C fixture. It compiles into a separate retained `_codex` library.
+`--fixture-only` runs just the TX fixture. Regenerate the sample vectors with
+`python tools/gen_ook_validation_vectors.py`; regenerate the actual TX fixture using the STM32
+`Tests/generate_ook_packet_fixture.ps1` script.
+
+The two manifest-driven benches (`ook_validation_vectors_tb`, `ook_tx_fixture_chain_tb`) are
+excluded from the generic regression scan because they need scenario-specific plusargs.
+The lifecycle bench covers fixed hysteresis, phase-window midpoint selection, sync replay, long
+zero runs and metric-dropout release. The SPI bench drives the production SPI slave to check
+atomic commits, deferred apply and coherent energy readback.
+
+The sample-chain runs accelerate sample cadence to one sample per simulation clock; they verify
+digital math/protocol behavior. Lifecycle watchdog counts are checked separately. Physical I2S,
+analog gain, noise, frequency mismatch and board timing require hardware validation.

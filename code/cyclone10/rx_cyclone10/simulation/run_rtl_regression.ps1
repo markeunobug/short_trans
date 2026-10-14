@@ -25,7 +25,9 @@ function Get-TestGroup([string]$name) {
     return 'misc'
 }
 
-$tests = @(Get-ChildItem -LiteralPath $tbRoot -File -Filter '*.sv' | Sort-Object Name | ForEach-Object {
+# These benches require manifest-driven arguments; run them with run_ook_vectors.py.
+$manifestDrivenTests = @('ook_validation_vectors_tb', 'ook_tx_fixture_chain_tb')
+$tests = @(Get-ChildItem -LiteralPath $tbRoot -File -Filter '*.sv' | Where-Object { $_.BaseName -notin $manifestDrivenTests } | Sort-Object Name | ForEach-Object {
     [pscustomobject]@{
         File = $_.FullName
         Module = $_.BaseName

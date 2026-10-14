@@ -6,7 +6,7 @@
 - DAC trigger: TIM4 update at exactly 48 kHz
 - DMA: circular, 960 samples split into two 480-sample halves
 - DMA width: 16-bit memory samples, 32-bit DAC peripheral writes
-- Bit mapping: `0 = 1.6 kHz`, `1 = 2.0 kHz`
+- Bit mapping: `0 = 1.7 kHz`, `1 = 1.9 kHz`
 - Symbol duration: 10 ms at 100 bit/s
 - Idle DAC code: 2048
 - Default amplitude: 256 DAC codes; valid range is 0 to 2047
@@ -33,8 +33,8 @@ PAYLOAD 010203A5
 PAYLOAD -
 META 1 0 7
 MODE SILENCE
-MODE TONE1600
-MODE TONE2000
+MODE TONE1700
+MODE TONE1900
 MODE ALT
 MODE PRBS
 MODE PACKET
@@ -58,7 +58,7 @@ bench image which starts a waveform immediately after reset:
 .\Tests\build_fsk_tx.ps1 -BootMode Alt -KeepBuildDirectory
 ```
 
-`BootMode` accepts `None`, `Tone1600`, `Tone2000`, or `Alt`. The default is
+`BootMode` accepts `None`, `Tone1700`, `Tone1900`, or `Alt`. The default is
 `None`, so production behavior remains UART-controlled and starts at midpoint.
 
 ## Packet Body
@@ -76,7 +76,7 @@ covers the complete four-byte header and payload.
 ## Bench Checks Still Required
 
 1. Confirm TIM4 DAC updates at 48.000 kSPS.
-2. Confirm `TONE1600` and `TONE2000` frequencies on PA4.
+2. Confirm `TONE1700` and `TONE1900` frequencies on PA4.
 3. Confirm ALT changes frequency every 10 ms without a midpoint or phase step.
 4. Sweep amplitude from a low value while checking receiver ADC clipping.
 5. Verify 0, 16, 32, and 64-byte packet timing and received payload equality

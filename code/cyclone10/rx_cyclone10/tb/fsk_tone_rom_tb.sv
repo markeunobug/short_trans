@@ -1,12 +1,12 @@
 `timescale 1ns/1ps
 
 module fsk_tone_rom_tb;
-    logic [6:0] phase_index;
+    logic [8:0] phase_index;
     wire signed [15:0] cos_f0;
     wire signed [15:0] sin_f0;
     wire signed [15:0] cos_f1;
     wire signed [15:0] sin_f1;
-    logic [63:0] expected [0:119];
+    logic [63:0] expected [0:479];
     integer index;
     integer errors;
 
@@ -24,10 +24,10 @@ module fsk_tone_rom_tb;
             expected
         );
         errors = 0;
-        phase_index = 7'd0;
+        phase_index = 9'd0;
 
-        for (index = 0; index < 120; index = index + 1) begin
-            phase_index = index[6:0];
+        for (index = 0; index < 480; index = index + 1) begin
+            phase_index = index[8:0];
             #1;
             if ({cos_f0, sin_f0, cos_f1, sin_f1} !== expected[index]) begin
                 $error("ROM mismatch at phase %0d: got %h expected %h",
@@ -38,7 +38,7 @@ module fsk_tone_rom_tb;
             end
         end
 
-        phase_index = 7'd120;
+        phase_index = 9'd480;
         #1;
         if ({cos_f0, sin_f0, cos_f1, sin_f1} !==
             {16'sd32767, 16'sd0, 16'sd32767, 16'sd0}) begin
@@ -47,7 +47,7 @@ module fsk_tone_rom_tb;
         end
 
         if (errors == 0)
-            $display("PASS: all 120 Q1.15 reference entries match");
+            $display("PASS: all 480 Q1.15 reference entries match");
         else
             $fatal(1, "FAIL: %0d tone ROM errors", errors);
         $finish;

@@ -77,6 +77,12 @@ module fsk_noise_tracker_tb;
         repeat (4) @(negedge clk);
         reset_n = 1'b1;
 
+        total_energy = 33'd80;
+        #1;
+        if (energy_above_threshold !== 1'b0) begin
+            $error("startup noise was reported as a carrier before noise_ready");
+            errors = errors + 1;
+        end
         send_metric(33'd80, 1'b1);
         if (!noise_ready || noise_energy != 33'd80) begin
             $error("first idle metric did not seed noise estimate");
@@ -143,4 +149,3 @@ module fsk_noise_tracker_tb;
         $finish;
     end
 endmodule
-

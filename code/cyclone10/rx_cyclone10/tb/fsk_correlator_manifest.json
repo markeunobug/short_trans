@@ -48,10 +48,10 @@
   ],
   "last_metric": {
     "accepted_sample": 5376,
-    "energy_f0": 214562890,
+    "energy_f0": 214563875,
     "energy_f1": 0,
-    "soft_metric": -214562890,
-    "total_energy": 214562890,
+    "soft_metric": -214563875,
+    "total_energy": 214563875,
     "confidence": 255,
     "hard_bit": 0
   }

@@ -14,6 +14,7 @@ module spi_task7_tb;
     wire spi_miso;
 
     wire [6:0] bus_address;
+    wire bus_read_preload;
     wire bus_read_strobe;
     wire [7:0] bus_read_data;
     wire bus_write_strobe;
@@ -74,6 +75,7 @@ module spi_task7_tb;
         .spi_mosi           (spi_mosi),
         .spi_miso           (spi_miso),
         .bus_address        (bus_address),
+        .bus_read_preload   (bus_read_preload),
         .bus_read_strobe    (bus_read_strobe),
         .bus_read_data      (bus_read_data),
         .bus_write_strobe   (bus_write_strobe),
@@ -85,6 +87,7 @@ module spi_task7_tb;
         .clk_sys                    (clk_sys),
         .rst_sys_n                  (rst_sys_n),
         .bus_address               (bus_address),
+        .bus_read_preload          (bus_read_preload),
         .bus_read_strobe           (bus_read_strobe),
         .bus_read_data             (bus_read_data),
         .bus_write_strobe          (bus_write_strobe),
@@ -103,6 +106,24 @@ module spi_task7_tb;
         .last_energy_f0            (last_energy_f0),
         .last_energy_f1            (last_energy_f1),
         .last_confidence           (last_confidence),
+        // Optional telemetry sources are idle in this SPI/FIFO test.
+        .rx_busy                   (1'b0),
+        .ook_energy                (32'd0),
+        .ook_hard_bit              (1'b0),
+        .ook_symbol_locked         (1'b0),
+        .ook_energy_ready          (1'b0),
+        .sweep_active              (1'b0),
+        .sweep_busy                (1'b0),
+        .sweep_done                (1'b0),
+        .sweep_error               (1'b0),
+        .sweep_energy_sum          (64'd0),
+        .sweep_energy_min          (32'd0),
+        .sweep_energy_max          (32'd0),
+        .sweep_clip_count          (32'd0),
+        .sweep_window_count        (8'd0),
+        .frame_timestamp           (32'd0),
+        .frame_timestamp_valid     (1'b0),
+        .frame_is_time_base        (1'b0),
         .frame_valid               (frame_valid),
         .frame_version_type        (frame_version_type),
         .frame_sequence            (frame_sequence),
@@ -250,6 +271,10 @@ module spi_task7_tb;
             $display("FAIL: MISO reset/deselected state is not Z");
             failures = failures + 1;
         end
+        if (energy_margin !== 8'h20) begin
+            $display("FAIL: ENERGY_MARGIN reset value is not 2.0x (0x20)");
+            failures = failures + 1;
+        end
 
         // Device identity and normal-register auto increment.
         spi_begin();
@@ -257,7 +282,7 @@ module spi_task7_tb;
         spi_transfer(8'h00, rx_byte);
         check_byte(rx_byte, 8'hA7, "DEVICE_ID");
         spi_transfer(8'h00, rx_byte);
-        check_byte(rx_byte, 8'h10, "FW_VERSION");
+        check_byte(rx_byte, 8'h13, "FW_VERSION");
         spi_end();
 
         spi_begin();

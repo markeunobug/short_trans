@@ -23,6 +23,9 @@ module fsk_frame_rx #(
     output reg  [7:0]  frame_version_type,
     output reg  [7:0]  frame_sequence,
     output reg  [7:0]  frame_payload_length,
+    output reg  [31:0] frame_timestamp,
+    output reg         frame_timestamp_valid,
+    output reg         frame_is_time_base,
     output reg         frame_payload_valid,
     output reg  [7:0]  frame_payload_data,
     output reg         frame_payload_last,
@@ -38,6 +41,11 @@ module fsk_frame_rx #(
     localparam [3:0] ST_CRC_HIGH    = 4'd3;
     localparam [3:0] ST_CRC_LOW     = 4'd4;
     localparam [3:0] ST_EMIT        = 4'd5;
+    localparam [3:0] ST_TIME        = 4'd6;
+
+    localparam [3:0] PROTOCOL_VERSION_TIME = 4'd2;
+    localparam [3:0] FRAME_TYPE_DATA      = 4'd0;
+    localparam [3:0] FRAME_TYPE_TIME_BASE = 4'd1;
 
     reg [3:0] state;
     reg [15:0] sync_shift;
@@ -53,6 +61,10 @@ module fsk_frame_rx #(
     reg [6:0] emit_index;
     reg [31:0] timeout_count;
     reg [7:0] payload_mem [0:63];
+    reg [2:0] time_byte_index;
+    reg [2:0] time_byte_count;
+    reg [31:0] time_shift;
+    reg time_base_valid;
 
     reg [15:0] next_sync;
     reg [7:0] next_byte;
@@ -127,6 +139,10 @@ module fsk_frame_rx #(
             frame_version_type    <= 8'd0;
             frame_sequence        <= 8'd0;
             frame_payload_length  <= 8'd0;
+            frame_timestamp       <= 32'd0;
+            frame_timestamp_valid <= 1'b0;
+            frame_is_time_base    <= 1'b0;
+            time_base_valid       <= 1'b0;
             frame_payload_valid   <= 1'b0;
             frame_payload_data    <= 8'd0;
             frame_payload_last    <= 1'b0;
@@ -183,6 +199,12 @@ module fsk_frame_rx #(
                                     invalid_length    <= 1'b0;
                                     crc8_state        <= 8'd0;
                                     crc16_state       <= 16'hFFFF;
+                                    time_byte_index   <= 3'd0;
+                                    time_byte_count   <= 3'd0;
+                                    time_shift        <= 32'd0;
+                                    frame_timestamp   <= 32'd0;
+                                    frame_timestamp_valid <= 1'b0;
+                                    frame_is_time_base <= 1'b0;
                                 end else begin
                                     sync_shift <= next_sync;
                                 end
@@ -237,14 +259,51 @@ module fsk_frame_rx #(
                                             state        <= ST_SEARCH_SYNC;
                                             sync_shift   <= 16'd0;
                                             sync_bit_count <= 5'd0;
-                                        end else if (frame_payload_length == 8'd0) begin
-                                            state <= ST_CRC_HIGH;
                                         end else begin
-                                            payload_byte_index <= 7'd0;
-                                            state              <= ST_PAYLOAD;
+                                            if ((frame_version_type[7:4] == PROTOCOL_VERSION_TIME) &&
+                                                ((frame_version_type[3:0] == FRAME_TYPE_DATA) ||
+                                                 (frame_version_type[3:0] == FRAME_TYPE_TIME_BASE))) begin
+                                                time_byte_count <= (frame_version_type[3:0] == FRAME_TYPE_TIME_BASE) ? 3'd4 : 3'd3;
+                                                time_byte_index <= 3'd0;
+                                                time_shift      <= 32'd0;
+                                                state           <= ST_TIME;
+                                            end else if (frame_payload_length == 8'd0) begin
+                                                state <= ST_CRC_HIGH;
+                                            end else begin
+                                                payload_byte_index <= 7'd0;
+                                                state              <= ST_PAYLOAD;
+                                            end
                                         end
                                     end
                                 endcase
+                            end else begin
+                                rx_byte_shift <= next_byte;
+                                rx_bit_count  <= rx_bit_count + 1'b1;
+                            end
+                        end
+                    end
+
+                    ST_TIME: begin
+                        if (bit_valid) begin
+                            next_byte = {rx_byte_shift[6:0], bit_value};
+                            if (rx_bit_count == 4'd7) begin
+                                rx_byte_shift <= 8'd0;
+                                rx_bit_count  <= 4'd0;
+                                crc16_state   <= crc16_byte(crc16_state, next_byte);
+                                time_shift    <= {time_shift[23:0], next_byte};
+                                if ((time_byte_index + 1'b1) >= time_byte_count) begin
+                                    frame_timestamp <= {time_shift[23:0], next_byte};
+                                    frame_is_time_base <= (frame_version_type[3:0] == FRAME_TYPE_TIME_BASE);
+                                    frame_timestamp_valid <= (frame_version_type[3:0] == FRAME_TYPE_TIME_BASE) ? 1'b1 : time_base_valid;
+                                    if (frame_payload_length == 8'd0)
+                                        state <= ST_CRC_HIGH;
+                                    else begin
+                                        payload_byte_index <= 7'd0;
+                                        state <= ST_PAYLOAD;
+                                    end
+                                end else begin
+                                    time_byte_index <= time_byte_index + 1'b1;
+                                end
                             end else begin
                                 rx_byte_shift <= next_byte;
                                 rx_bit_count  <= rx_bit_count + 1'b1;
@@ -295,6 +354,9 @@ module fsk_frame_rx #(
                                 rx_bit_count  <= 4'd0;
                                 if ({crc_received_high[7:0], next_byte} == crc16_state) begin
                                     frame_valid <= 1'b1;
+                                    if ((frame_version_type[7:4] == PROTOCOL_VERSION_TIME) &&
+                                        (frame_version_type[3:0] == FRAME_TYPE_TIME_BASE))
+                                        time_base_valid <= 1'b1;
                                     if (frame_payload_length == 8'd0) begin
                                         state <= ST_SEARCH_SYNC;
                                         sync_shift <= 16'd0;

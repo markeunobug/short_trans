@@ -17,6 +17,9 @@ module rx_frame_fifo #(
     input  wire [7:0]  frame_version_type,
     input  wire [7:0]  frame_sequence,
     input  wire [7:0]  frame_payload_length,
+    input  wire [31:0] frame_timestamp,
+    input  wire        frame_timestamp_valid,
+    input  wire        frame_is_time_base,
     input  wire        frame_payload_valid,
     input  wire [7:0]  frame_payload_data,
     input  wire        frame_payload_last,
@@ -30,6 +33,9 @@ module rx_frame_fifo #(
     output wire [7:0]  head_sequence,
     output wire [7:0]  head_length,
     output wire [7:0]  head_payload_data,
+    output wire [31:0] head_timestamp,
+    output wire        head_timestamp_valid,
+    output wire        head_is_time_base,
     output wire [7:0]  head_remaining,
     output reg  [8:0]  payload_level,
     output reg  [3:0]  frame_count,
@@ -45,6 +51,9 @@ module rx_frame_fifo #(
     reg [7:0] desc_version_type [0:DESC_DEPTH-1];
     reg [7:0] desc_sequence     [0:DESC_DEPTH-1];
     reg [7:0] desc_length       [0:DESC_DEPTH-1];
+    reg [31:0] desc_timestamp   [0:DESC_DEPTH-1];
+    reg desc_timestamp_valid    [0:DESC_DEPTH-1];
+    reg desc_is_time_base       [0:DESC_DEPTH-1];
 
     reg [7:0] payload_wr_ptr;
     reg [7:0] payload_rd_ptr;
@@ -56,6 +65,9 @@ module rx_frame_fifo #(
     reg [7:0] ingress_version_type;
     reg [7:0] ingress_sequence;
     reg [7:0] ingress_length;
+    reg [31:0] ingress_timestamp;
+    reg ingress_timestamp_valid;
+    reg ingress_is_time_base;
     reg [6:0] ingress_count;
     reg [7:0] ingress_start_ptr;
 
@@ -87,6 +99,9 @@ module rx_frame_fifo #(
                                (desc_length[desc_rd_ptr] - head_bytes_read) : 8'd0;
     assign head_payload_data = (frame_count != 0 && head_remaining != 0) ?
                                payload_mem[payload_rd_ptr] : 8'd0;
+    assign head_timestamp = (frame_count != 0) ? desc_timestamp[desc_rd_ptr] : 32'd0;
+    assign head_timestamp_valid = (frame_count != 0) ? desc_timestamp_valid[desc_rd_ptr] : 1'b0;
+    assign head_is_time_base = (frame_count != 0) ? desc_is_time_base[desc_rd_ptr] : 1'b0;
 
     assign drop_event = drop_frame && (frame_count != 0);
     assign pop_event = pop_frame && (frame_count != 0) &&
@@ -123,10 +138,16 @@ module rx_frame_fifo #(
                 desc_version_type[desc_wr_ptr] <= frame_version_type;
                 desc_sequence[desc_wr_ptr]     <= frame_sequence;
                 desc_length[desc_wr_ptr]       <= frame_payload_length;
+                desc_timestamp[desc_wr_ptr]    <= frame_timestamp;
+                desc_timestamp_valid[desc_wr_ptr] <= frame_timestamp_valid;
+                desc_is_time_base[desc_wr_ptr] <= frame_is_time_base;
             end else begin
                 desc_version_type[desc_wr_ptr] <= ingress_version_type;
                 desc_sequence[desc_wr_ptr]     <= ingress_sequence;
                 desc_length[desc_wr_ptr]       <= ingress_length;
+                desc_timestamp[desc_wr_ptr]    <= ingress_timestamp;
+                desc_timestamp_valid[desc_wr_ptr] <= ingress_timestamp_valid;
+                desc_is_time_base[desc_wr_ptr] <= ingress_is_time_base;
             end
         end
     end
@@ -148,6 +169,9 @@ module rx_frame_fifo #(
             ingress_version_type  <= 8'd0;
             ingress_sequence      <= 8'd0;
             ingress_length        <= 8'd0;
+            ingress_timestamp     <= 32'd0;
+            ingress_timestamp_valid <= 1'b0;
+            ingress_is_time_base  <= 1'b0;
             ingress_count         <= 7'd0;
             ingress_start_ptr     <= 8'd0;
         end else begin
@@ -202,6 +226,9 @@ module rx_frame_fifo #(
                         ingress_busy   <= 1'b1;
                         ingress_accept <= 1'b0;
                         ingress_length <= frame_payload_length;
+                        ingress_timestamp <= frame_timestamp;
+                        ingress_timestamp_valid <= frame_timestamp_valid;
+                        ingress_is_time_base <= frame_is_time_base;
                         ingress_count  <= 7'd0;
                     end
                 end else if (frame_payload_length != 0) begin
@@ -210,6 +237,9 @@ module rx_frame_fifo #(
                     ingress_version_type <= frame_version_type;
                     ingress_sequence     <= frame_sequence;
                     ingress_length       <= frame_payload_length;
+                    ingress_timestamp    <= frame_timestamp;
+                    ingress_timestamp_valid <= frame_timestamp_valid;
+                    ingress_is_time_base <= frame_is_time_base;
                     ingress_count        <= 7'd0;
                     ingress_start_ptr    <= payload_wr_ptr;
                 end

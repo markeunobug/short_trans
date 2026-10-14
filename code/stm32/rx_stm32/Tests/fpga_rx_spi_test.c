@@ -25,6 +25,7 @@ typedef struct {
     unsigned select_count;
     unsigned deselect_count;
     unsigned adc_reinit_count;
+    uint8_t bump_generation_once;
 } mock_fpga_t;
 
 static void mock_update_dynamic_registers(mock_fpga_t *mock)
@@ -91,6 +92,42 @@ static void mock_control_write(mock_fpga_t *mock, uint8_t value)
     }
 }
 
+static uint32_t mock_u32_le(const uint8_t *bytes)
+{
+    return (uint32_t)bytes[0] |
+           ((uint32_t)bytes[1] << 8U) |
+           ((uint32_t)bytes[2] << 16U) |
+           ((uint32_t)bytes[3] << 24U);
+}
+
+static void mock_ask_control_write(mock_fpga_t *mock, uint8_t value)
+{
+    uint32_t low = mock_u32_le(&mock->registers[FPGA_RX_REG_ASK_LOW_SHADOW_0]);
+    uint32_t high = mock_u32_le(&mock->registers[FPGA_RX_REG_ASK_HIGH_SHADOW_0]);
+    uint8_t mode = mock->registers[FPGA_RX_REG_RX_MODE_SHADOW];
+
+    if ((value & FPGA_RX_ASK_CONFIG_CLEAR_ERROR) != 0U) {
+        mock->registers[FPGA_RX_REG_ASK_CONFIG_STATUS] &=
+            (uint8_t)~FPGA_RX_ASK_STATUS_ERROR;
+    }
+    if ((value & FPGA_RX_ASK_CONFIG_COMMIT) != 0U) {
+        if ((mock->registers[FPGA_RX_REG_ASK_CONFIG_STATUS] &
+             FPGA_RX_ASK_STATUS_PENDING) != 0U ||
+            ((mode != (uint8_t)FPGA_RX_SPI_MODE_FSK) &&
+             (mode != (uint8_t)FPGA_RX_SPI_MODE_OOK)) || (low >= high)) {
+            mock->registers[FPGA_RX_REG_ASK_CONFIG_STATUS] |=
+                FPGA_RX_ASK_STATUS_ERROR;
+        } else {
+            (void)memcpy(&mock->registers[FPGA_RX_REG_ASK_LOW_ACTIVE_0],
+                         &mock->registers[FPGA_RX_REG_ASK_LOW_SHADOW_0], 4U);
+            (void)memcpy(&mock->registers[FPGA_RX_REG_ASK_HIGH_ACTIVE_0],
+                         &mock->registers[FPGA_RX_REG_ASK_HIGH_SHADOW_0], 4U);
+            mock->registers[FPGA_RX_REG_RX_MODE_ACTIVE] = mode;
+            ++mock->registers[FPGA_RX_REG_CONFIG_GENERATION];
+        }
+    }
+}
+
 static uint8_t mock_read_register(mock_fpga_t *mock, uint8_t address)
 {
     if (address == FPGA_RX_REG_RX_DATA) {
@@ -126,6 +163,13 @@ static uint8_t mock_read_register(mock_fpga_t *mock, uint8_t address)
     }
 
     mock_update_dynamic_registers(mock);
+    if ((address == FPGA_RX_REG_CONFIG_GENERATION) &&
+        (mock->bump_generation_once != 0U)) {
+        uint8_t result = mock->registers[address];
+        mock->bump_generation_once = 0U;
+        ++mock->registers[FPGA_RX_REG_CONFIG_GENERATION];
+        return result;
+    }
     return mock->registers[address & 0x7FU];
 }
 
@@ -133,6 +177,8 @@ static void mock_write_register(mock_fpga_t *mock, uint8_t address, uint8_t valu
 {
     if (address == FPGA_RX_REG_CONTROL) {
         mock_control_write(mock, value);
+    } else if (address == FPGA_RX_REG_ASK_CONFIG_CONTROL) {
+        mock_ask_control_write(mock, value);
     } else {
         mock->registers[address & 0x7FU] = value;
     }
@@ -214,6 +260,21 @@ static void mock_load_frame(
     mock_update_dynamic_registers(mock);
 }
 
+static void mock_load_time_metadata(
+    mock_fpga_t *mock,
+    uint8_t flags,
+    uint32_t time_value)
+{
+    mock->registers[FPGA_RX_REG_HEAD_TIME_FLAGS] = flags;
+    mock->registers[FPGA_RX_REG_HEAD_TIMESTAMP_B3] =
+        (uint8_t)(time_value >> 24U);
+    mock->registers[FPGA_RX_REG_HEAD_TIMESTAMP_B2] =
+        (uint8_t)(time_value >> 16U);
+    mock->registers[FPGA_RX_REG_HEAD_TIMESTAMP_B1] =
+        (uint8_t)(time_value >> 8U);
+    mock->registers[FPGA_RX_REG_HEAD_TIMESTAMP_B0] = (uint8_t)time_value;
+}
+
 int main(void)
 {
     static const uint8_t payload[] = {0x10U, 0x20U, 0x30U, 0x40U, 0x50U, 0x60U};
@@ -223,6 +284,10 @@ int main(void)
     fpga_rx_spi_status_t status;
     fpga_rx_spi_diagnostics_t diagnostics;
     fpga_rx_spi_tuning_t tuning;
+    fpga_rx_spi_sweep_config_t sweep_config;
+    fpga_rx_spi_sweep_result_t sweep_result;
+    fpga_rx_spi_ask_config_t ask_config;
+    fpga_rx_spi_ask_status_t ask_status;
     fpga_rx_spi_frame_meta_t metadata;
     int32_t samples[FPGA_RX_SPI_SNAPSHOT_WORDS];
     uint8_t firmware_version;
@@ -250,6 +315,22 @@ int main(void)
     mock.registers[FPGA_RX_REG_LAST_ENERGY_0] = 11U;
     mock.registers[FPGA_RX_REG_LAST_ENERGY_1] = 22U;
     mock.registers[FPGA_RX_REG_LAST_CONFIDENCE] = 33U;
+    mock.registers[FPGA_RX_REG_RX_MODE_SHADOW] = FPGA_RX_SPI_MODE_FSK;
+    mock.registers[FPGA_RX_REG_RX_MODE_ACTIVE] = FPGA_RX_SPI_MODE_FSK;
+    mock.registers[FPGA_RX_REG_ASK_LOW_SHADOW_0] = 0x90U;
+    mock.registers[FPGA_RX_REG_ASK_LOW_SHADOW_0 + 1U] = 0x01U;
+    mock.registers[FPGA_RX_REG_ASK_LOW_ACTIVE_0] = 0x90U;
+    mock.registers[FPGA_RX_REG_ASK_LOW_ACTIVE_0 + 1U] = 0x01U;
+    mock.registers[FPGA_RX_REG_ASK_HIGH_SHADOW_0] = 0x58U;
+    mock.registers[FPGA_RX_REG_ASK_HIGH_SHADOW_0 + 1U] = 0x02U;
+    mock.registers[FPGA_RX_REG_ASK_HIGH_ACTIVE_0] = 0x58U;
+    mock.registers[FPGA_RX_REG_ASK_HIGH_ACTIVE_0 + 1U] = 0x02U;
+    mock.registers[FPGA_RX_REG_ASK_ENERGY_0] = 0x78U;
+    mock.registers[FPGA_RX_REG_ASK_ENERGY_0 + 1U] = 0x56U;
+    mock.registers[FPGA_RX_REG_ASK_ENERGY_0 + 2U] = 0x34U;
+    mock.registers[FPGA_RX_REG_ASK_ENERGY_0 + 3U] = 0x12U;
+    mock.registers[FPGA_RX_REG_ASK_FLAGS] = FPGA_RX_ASK_FLAG_HARD_BIT |
+                                             FPGA_RX_ASK_FLAG_ENERGY_READY;
 
     bus.transfer = mock_transfer;
     bus.chip_select = mock_chip_select;
@@ -302,12 +383,129 @@ int main(void)
     CHECK(diagnostics.energy_2000 == 22U);
     CHECK(diagnostics.confidence == 33U);
 
-    mock_load_frame(&mock, 0x12U, 0x5AU, payload, (uint8_t)sizeof(payload));
+    CHECK(fpga_rx_spi_ask_read_status(&device, &ask_status) == FPGA_RX_SPI_OK);
+    CHECK(ask_status.active.mode == FPGA_RX_SPI_MODE_FSK);
+    CHECK(ask_status.active.low_threshold == 400U);
+    CHECK(ask_status.active.high_threshold == 600U);
+    CHECK(ask_status.energy == 0x12345678UL);
+    CHECK(ask_status.hard_bit == 1U);
+    CHECK(ask_status.symbol_locked == 0U);
+    CHECK(ask_status.energy_ready == 1U);
+
+    ask_config.mode = FPGA_RX_SPI_MODE_OOK;
+    ask_config.low_threshold = 0x11223344UL;
+    ask_config.high_threshold = 0x55667788UL;
+    CHECK(fpga_rx_spi_ask_apply_config(&device, &ask_config, &ask_status) ==
+          FPGA_RX_SPI_OK);
+    CHECK(mock.registers[FPGA_RX_REG_ASK_LOW_SHADOW_0] == 0x44U);
+    CHECK(mock.registers[FPGA_RX_REG_ASK_LOW_SHADOW_0 + 3U] == 0x11U);
+    CHECK(mock.registers[FPGA_RX_REG_ASK_HIGH_SHADOW_0] == 0x88U);
+    CHECK(mock.registers[FPGA_RX_REG_ASK_HIGH_ACTIVE_0 + 3U] == 0x55U);
+    CHECK(ask_status.active.mode == FPGA_RX_SPI_MODE_OOK);
+    CHECK(ask_status.active.low_threshold == 0x11223344UL);
+    CHECK(ask_status.active.high_threshold == 0x55667788UL);
+    CHECK(ask_status.generation == 1U);
+
+    mock.bump_generation_once = 1U;
+    CHECK(fpga_rx_spi_ask_read_status(&device, &ask_status) == FPGA_RX_SPI_OK);
+    CHECK(ask_status.generation == 2U);
+    mock.registers[FPGA_RX_REG_ASK_CONFIG_STATUS] = FPGA_RX_ASK_STATUS_PENDING;
+    ask_config.mode = FPGA_RX_SPI_MODE_FSK;
+    ask_config.low_threshold = 7U;
+    ask_config.high_threshold = 8U;
+    CHECK(fpga_rx_spi_ask_apply_config(&device, &ask_config, &ask_status) ==
+          FPGA_RX_SPI_PROTOCOL_ERROR);
+    CHECK(mock.registers[FPGA_RX_REG_RX_MODE_ACTIVE] == FPGA_RX_SPI_MODE_OOK);
+    CHECK(mock.registers[FPGA_RX_REG_RX_MODE_SHADOW] == FPGA_RX_SPI_MODE_OOK);
+    CHECK(mock.registers[FPGA_RX_REG_ASK_LOW_SHADOW_0] == 0x44U);
+    mock.registers[FPGA_RX_REG_ASK_CONFIG_STATUS] = 0U;
+    mock.registers[FPGA_RX_REG_RX_MODE_ACTIVE] = 3U;
+    CHECK(fpga_rx_spi_ask_read_status(&device, &ask_status) ==
+          FPGA_RX_SPI_PROTOCOL_ERROR);
+    mock.registers[FPGA_RX_REG_RX_MODE_ACTIVE] = FPGA_RX_SPI_MODE_OOK;
+    ask_config.low_threshold = 3U;
+    ask_config.high_threshold = 3U;
+    CHECK(fpga_rx_spi_ask_stage_config(&device, &ask_config) ==
+          FPGA_RX_SPI_INVALID_ARGUMENT);
+    mock.registers[FPGA_RX_REG_FW_VERSION] = 0x11U;
+    CHECK(fpga_rx_spi_ask_read_status(&device, &ask_status) ==
+          FPGA_RX_SPI_PROTOCOL_ERROR);
+    mock.registers[FPGA_RX_REG_FW_VERSION] = 0xFFU;
+    CHECK(fpga_rx_spi_ask_read_status(&device, &ask_status) ==
+          FPGA_RX_SPI_PROTOCOL_ERROR);
+    mock.registers[FPGA_RX_REG_FW_VERSION] = FPGA_RX_SPI_PROTOCOL_VERSION;
+    mock.registers[FPGA_RX_REG_ASK_CONFIG_STATUS] = FPGA_RX_ASK_STATUS_ERROR;
+    CHECK(fpga_rx_spi_ask_clear_error(&device) == FPGA_RX_SPI_OK);
+    CHECK(mock.registers[FPGA_RX_REG_ASK_CONFIG_STATUS] == 0U);
+
+    sweep_config.phase_increment = 0x08888889UL;
+    sweep_config.settle_samples = 960U;
+    sweep_config.window_samples = 4800U;
+    sweep_config.average_count = 3U;
+    CHECK(fpga_rx_spi_sweep_start(&device, &sweep_config) == FPGA_RX_SPI_OK);
+    CHECK(mock.registers[FPGA_RX_REG_SWEEP_PHASE_0] == 0x89U);
+    CHECK(mock.registers[FPGA_RX_REG_SWEEP_PHASE_0 + 1U] == 0x88U);
+    CHECK(mock.registers[FPGA_RX_REG_SWEEP_SETTLE_L] == 0xC0U);
+    CHECK(mock.registers[FPGA_RX_REG_SWEEP_SETTLE_L + 1U] == 0x03U);
+    CHECK(mock.registers[FPGA_RX_REG_SWEEP_WINDOW_L] == 0xC0U);
+    CHECK(mock.registers[FPGA_RX_REG_SWEEP_WINDOW_L + 1U] == 0x12U);
+    CHECK(mock.registers[FPGA_RX_REG_SWEEP_AVERAGE] == 3U);
+    CHECK(mock.registers[FPGA_RX_REG_SWEEP_CONTROL] ==
+          FPGA_RX_SWEEP_CONTROL_START);
+
+    mock.registers[FPGA_RX_REG_SWEEP_STATUS] = FPGA_RX_SWEEP_STATUS_ACTIVE |
+                                               FPGA_RX_SWEEP_STATUS_DONE;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 0U] = 0x66U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 1U] = 0x55U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 2U] = 0x44U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 3U] = 0x33U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 4U] = 0x22U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 5U] = 0x11U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 6U] = 0U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 7U] = 0U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 8U] = 0x78U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 9U] = 0x56U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 10U] = 0x34U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 11U] = 0x12U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 12U] = 0xEFU;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 13U] = 0xCDU;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 14U] = 0xABU;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 15U] = 0x89U;
+    mock.registers[FPGA_RX_REG_SWEEP_SUM_0 + 16U] = 7U;
+    mock.registers[FPGA_RX_REG_SWEEP_COUNT] = 3U;
+    CHECK(fpga_rx_spi_sweep_read_result(&device, &sweep_result) ==
+          FPGA_RX_SPI_OK);
+    CHECK(sweep_result.energy_sum == 0x0000112233445566ULL);
+    CHECK(sweep_result.energy_min == 0x12345678UL);
+    CHECK(sweep_result.energy_max == 0x89ABCDEFUL);
+    CHECK(sweep_result.clip_count == 7U);
+    CHECK(sweep_result.window_count == 3U);
+    CHECK(fpga_rx_spi_sweep_abort(&device) == FPGA_RX_SPI_OK);
+    CHECK(mock.registers[FPGA_RX_REG_SWEEP_CONTROL] ==
+          FPGA_RX_SWEEP_CONTROL_ABORT);
+
+    mock_load_time_metadata(&mock, 0x02U, 0x12345678UL);
+    mock_load_frame(&mock, 0x21U, 0x5AU, NULL, 0U);
     CHECK(fpga_rx_spi_begin_frame(&device, &metadata) == FPGA_RX_SPI_OK);
-    CHECK(metadata.version == 1U);
-    CHECK(metadata.frame_type == 2U);
+    CHECK(metadata.version == 2U);
+    CHECK(metadata.frame_type == 1U);
+    CHECK(metadata.time_base_frame == 1U);
+    CHECK(metadata.timestamp_valid == 1U);
+    CHECK(metadata.base_time_s == 0x12345678UL);
+    CHECK(metadata.timestamp_ms == 0x12345678ULL * 1000ULL);
+    CHECK(fpga_rx_spi_pop_frame(&device) == FPGA_RX_SPI_OK);
+
+    mock_load_time_metadata(&mock, 0x01U, 0x00012345UL);
+    mock_load_frame(&mock, 0x20U, 0x5AU, payload, (uint8_t)sizeof(payload));
+    CHECK(fpga_rx_spi_begin_frame(&device, &metadata) == FPGA_RX_SPI_OK);
+    CHECK(metadata.version == 2U);
+    CHECK(metadata.frame_type == 0U);
     CHECK(metadata.sequence == 0x5AU);
     CHECK(metadata.payload_length == sizeof(payload));
+    CHECK(metadata.elapsed_10ms == 0x00012345UL);
+    CHECK(metadata.timestamp_valid == 1U);
+    CHECK(metadata.timestamp_ms ==
+          (0x12345678ULL * 1000ULL) + (0x00012345ULL * 10ULL));
     CHECK(fpga_rx_spi_read_payload(&device, buffer, 2U, &bytes_read) ==
           FPGA_RX_SPI_OK);
     CHECK(bytes_read == 2U);
@@ -320,6 +518,7 @@ int main(void)
     CHECK(fpga_rx_spi_pop_frame(&device) == FPGA_RX_SPI_OK);
     CHECK(mock.registers[FPGA_RX_REG_FRAME_COUNT] == 0U);
 
+    mock_load_time_metadata(&mock, 0x00U, 7U);
     mock_load_frame(&mock, 0x10U, 0x5BU, payload, (uint8_t)sizeof(payload));
     CHECK(fpga_rx_spi_begin_frame(&device, &metadata) == FPGA_RX_SPI_OK);
     CHECK(fpga_rx_spi_read_payload(&device, buffer, 1U, &bytes_read) ==
@@ -363,7 +562,8 @@ int main(void)
     CHECK(mock.selected == 0U);
     CHECK(mock.select_count == mock.deselect_count - 1U);
 
-    (void)printf("PASS: register/status, segmented frame, POP/DROP, controls, "
-                 "diagnostics and 4096-byte snapshot verified\n");
+    (void)printf("PASS: register/status, OOK staging/commit/readback, coherent "
+                 "generation, sweep diagnostics, segmented frame, POP/DROP, "
+                 "controls and 4096-byte snapshot verified\n");
     return 0;
 }

@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $compilerPath = (Get-Command $Compiler -ErrorAction Stop).Source
 $output = Join-Path $env:TEMP ("fpga_rx_spi_test_" + [guid]::NewGuid().ToString("N") + ".exe")
+$commandOutput = Join-Path $env:TEMP ("rx_command_text_test_" + [guid]::NewGuid().ToString("N") + ".exe")
 
 Push-Location $projectRoot
 try {
@@ -34,6 +35,25 @@ try {
         "-Wextra" `
         "-Werror" `
         "-pedantic" `
+        "-ICore/Inc" `
+        "Core/Src/rx_command_text.c" `
+        "Tests/rx_command_text_test.c" `
+        "-o" $commandOutput
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command text test compilation failed"
+    }
+
+    & $commandOutput
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command text test failed"
+    }
+
+    & $compilerPath `
+        "-std=c11" `
+        "-Wall" `
+        "-Wextra" `
+        "-Werror" `
+        "-pedantic" `
         "-DFPGA_RX_SPI_ENABLE_STM32_HAL" `
         "-ITests/fpga_rx_spi_hal_mock" `
         "-ICore/Inc" `
@@ -49,5 +69,8 @@ finally {
     Pop-Location
     if (Test-Path -LiteralPath $output) {
         Remove-Item -LiteralPath $output -Force
+    }
+    if (Test-Path -LiteralPath $commandOutput) {
+        Remove-Item -LiteralPath $commandOutput -Force
     }
 }

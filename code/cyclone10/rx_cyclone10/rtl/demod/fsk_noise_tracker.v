@@ -35,7 +35,11 @@ module fsk_noise_tracker #(
         {ENERGY_WIDTH{1'b1}} :
         threshold_sum[ENERGY_WIDTH-1:0];
 
-    assign energy_above_threshold = (total_energy > carrier_threshold);
+    // Do not call positive startup noise a carrier while the baseline is
+    // still uninitialized. Without this gate, noise_energy=0 makes the
+    // threshold zero and prevents the idle estimator from ever bootstrapping.
+    assign energy_above_threshold = noise_ready &&
+                                    (total_energy > carrier_threshold);
 
     wire [ENERGY_WIDTH-1:0] upward_difference =
         total_energy - noise_energy;

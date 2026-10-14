@@ -5,6 +5,7 @@
 #define FSK_TX_HEADER_BYTES             4U
 #define FSK_TX_CRC16_BYTES              2U
 #define FSK_TX_FRAME_BODY_MAX_BYTES     (FSK_TX_HEADER_BYTES + \
+                                         FSK_TX_BASE_TIME_BYTES + \
                                          FSK_TX_MAX_PAYLOAD_BYTES + \
                                          FSK_TX_CRC16_BYTES)
 #define FSK_TX_SILENCE_SYMBOLS          (FSK_TX_INTERFRAME_SILENCE_MS / 10U)
@@ -31,11 +32,24 @@ typedef struct
     volatile uint8_t running;
     volatile FskTx_Mode selected_mode;
     volatile FskTx_Mode active_mode;
+    volatile FskTx_Modulation modulation;
     volatile uint16_t amplitude;
     volatile uint8_t payload_length;
     volatile uint8_t version;
     volatile uint8_t frame_type;
     volatile uint8_t sequence;
+    volatile uint8_t time_valid;
+    volatile uint8_t time_base_pending;
+    volatile uint32_t configured_time_s;
+    volatile uint32_t configured_tick_ms;
+    volatile uint32_t base_time_s;
+    volatile uint32_t base_tick_ms;
+    volatile uint32_t elapsed_10ms;
+    volatile uint32_t frame_timestamp;
+    volatile uint16_t sweep_sequence;
+    volatile uint16_t sweep_frequency_hz;
+    volatile uint32_t sweep_phase_increment;
+    uint32_t sweep_phase_accumulator;
     volatile uint32_t rendered_symbols;
     volatile uint32_t dma_error_count;
     volatile FskTx_Result last_error;
@@ -51,18 +65,47 @@ typedef struct
 
 static FskTx_Context s_tx;
 
-static const int16_t s_sine_1600[30] = {
-         0,   6813,  13328,  19260,  24351,  28377,  31163,  32587,
-     32587,  31163,  28377,  24351,  19260,  13328,   6813,      0,
-     -6813, -13328, -19260, -24351, -28377, -31163, -32587, -32587,
-    -31163, -28377, -24351, -19260, -13328,  -6813
+#include "fsk_tone_tables.h"
+
+/* 48 ksample/s * 3 cycles / 80 samples = exactly 1800 Hz. */
+static const int16_t s_sine_1800_80[FSK_TX_OOK_LUT_SAMPLES] = {
+     0,  7649, 14876, 21280, 26509, 30273, 32364, 32666,
+ 31163, 27938, 23170, 17121, 10126,  2571, -5126,-12539,
+-19260,-24916,-29196,-31862,-32767,-31862,-29196,-24916,
+-19260,-12539, -5126,  2571, 10126, 17121, 23170, 27938,
+ 31163, 32666, 32364, 30273, 26509, 21280, 14876,  7649,
+     0, -7649,-14876,-21280,-26509,-30273,-32364,-32666,
+-31163,-27938,-23170,-17121,-10126, -2571,  5126, 12539,
+ 19260, 24916, 29196, 31862, 32767, 31862, 29196, 24916,
+ 19260, 12539,  5126, -2571,-10126,-17121,-23170,-27938,
+-31163,-32666,-32364,-30273,-26509,-21280,-14876, -7649
 };
 
-static const int16_t s_sine_2000[24] = {
-         0,   8481,  16383,  23170,  28377,  31650,  32767,  31650,
-     28377,  23170,  16383,   8481,      0,  -8481, -16383, -23170,
-    -28377, -31650, -32767, -31650, -28377, -23170, -16384,  -8481
+static const int16_t s_quarter_sine_256[65] = {
+        0,   804,  1608,  2410,  3212,  4011,  4808,  5602,
+     6393,  7179,  7962,  8739,  9512, 10278, 11039, 11793,
+    12539, 13279, 14010, 14732, 15446, 16151, 16846, 17530,
+    18204, 18868, 19519, 20159, 20787, 21403, 22005, 22594,
+    23170, 23731, 24279, 24811, 25329, 25832, 26319, 26790,
+    27245, 27683, 28105, 28510, 28898, 29268, 29621, 29956,
+    30273, 30571, 30852, 31113, 31356, 31580, 31785, 31971,
+    32137, 32285, 32412, 32521, 32609, 32678, 32728, 32757,
+    32767
 };
+
+static int16_t FskTx_SineFromPhase(uint32_t phase)
+{
+    uint8_t phase8 = (uint8_t)(phase >> 24U);
+    uint8_t offset = (uint8_t)(phase8 & 0x3FU);
+    int16_t magnitude;
+
+    if ((phase8 & 0x40U) != 0U)
+    {
+        offset = (uint8_t)(64U - offset);
+    }
+    magnitude = s_quarter_sine_256[offset];
+    return ((phase8 & 0x80U) != 0U) ? (int16_t)-magnitude : magnitude;
+}
 
 static uint32_t FskTx_EnterCritical(void)
 {
@@ -184,10 +227,58 @@ uint16_t FskTx_Crc16CcittFalse(const uint8_t *data, size_t length)
     return crc;
 }
 
+static void FskTx_WriteBe24(uint8_t *destination, uint32_t value)
+{
+    destination[0] = (uint8_t)(value >> 16U);
+    destination[1] = (uint8_t)(value >> 8U);
+    destination[2] = (uint8_t)value;
+}
+
+static void FskTx_WriteBe32(uint8_t *destination, uint32_t value)
+{
+    destination[0] = (uint8_t)(value >> 24U);
+    destination[1] = (uint8_t)(value >> 16U);
+    destination[2] = (uint8_t)(value >> 8U);
+    destination[3] = (uint8_t)value;
+}
+
+static uint32_t FskTx_CurrentTimeSeconds(uint32_t tick_ms)
+{
+    return s_tx.configured_time_s +
+           ((tick_ms - s_tx.configured_tick_ms) / 1000U);
+}
+
+static void FskTx_LatchPacketTime(void)
+{
+    uint32_t now_ms = HAL_GetTick();
+
+    if (s_tx.frame_type == FSK_TX_FRAME_TYPE_TIME_BASE)
+    {
+        s_tx.base_time_s = FskTx_CurrentTimeSeconds(now_ms);
+        s_tx.base_tick_ms = now_ms;
+        s_tx.elapsed_10ms = 0U;
+        s_tx.frame_timestamp = s_tx.base_time_s;
+    }
+    else
+    {
+        s_tx.elapsed_10ms = (s_tx.time_valid != 0U)
+                                ? ((now_ms - s_tx.base_tick_ms) /
+                                   FSK_TX_ELAPSED_UNIT_MS)
+                                : 0U;
+        s_tx.frame_timestamp = s_tx.elapsed_10ms & 0x00FFFFFFUL;
+    }
+}
+
 static void FskTx_BuildFrameBody(void)
 {
     uint16_t crc16;
-    uint8_t payload_length = s_tx.payload_length;
+    uint8_t payload_length = (s_tx.frame_type == FSK_TX_FRAME_TYPE_TIME_BASE)
+                                 ? 0U
+                                 : s_tx.payload_length;
+    uint8_t time_bytes = (s_tx.frame_type == FSK_TX_FRAME_TYPE_TIME_BASE)
+                             ? FSK_TX_BASE_TIME_BYTES
+                             : FSK_TX_DATA_TIME_BYTES;
+    uint16_t payload_offset = (uint16_t)(FSK_TX_HEADER_BYTES + time_bytes);
 
     s_tx.frame_body[0] = (uint8_t)((s_tx.version << 4U) |
                                    (s_tx.frame_type & 0x0FU));
@@ -195,20 +286,31 @@ static void FskTx_BuildFrameBody(void)
     s_tx.frame_body[2] = payload_length;
     s_tx.frame_body[3] = FskTx_Crc8Atm(s_tx.frame_body, 3U);
 
+    if (s_tx.frame_type == FSK_TX_FRAME_TYPE_TIME_BASE)
+    {
+        FskTx_WriteBe32(&s_tx.frame_body[FSK_TX_HEADER_BYTES],
+                        s_tx.frame_timestamp);
+    }
+    else
+    {
+        FskTx_WriteBe24(&s_tx.frame_body[FSK_TX_HEADER_BYTES],
+                        s_tx.frame_timestamp);
+    }
+
     if (payload_length != 0U)
     {
-        memcpy(&s_tx.frame_body[FSK_TX_HEADER_BYTES],
+        memcpy(&s_tx.frame_body[payload_offset],
                s_tx.payload,
                payload_length);
     }
 
     crc16 = FskTx_Crc16CcittFalse(s_tx.frame_body,
-                                  FSK_TX_HEADER_BYTES + payload_length);
-    s_tx.frame_body[FSK_TX_HEADER_BYTES + payload_length] =
+                                  payload_offset + payload_length);
+    s_tx.frame_body[payload_offset + payload_length] =
         (uint8_t)(crc16 >> 8U);
-    s_tx.frame_body[FSK_TX_HEADER_BYTES + payload_length + 1U] =
+    s_tx.frame_body[payload_offset + payload_length + 1U] =
         (uint8_t)crc16;
-    s_tx.frame_body_length = (uint16_t)(FSK_TX_HEADER_BYTES +
+    s_tx.frame_body_length = (uint16_t)(payload_offset +
                                         payload_length +
                                         FSK_TX_CRC16_BYTES);
 }
@@ -221,10 +323,10 @@ static void FskTx_ResetGenerator(FskTx_Mode mode)
     s_tx.packet_bit_index = 0U;
     s_tx.silence_symbols_remaining = 0U;
     s_tx.packet_stage = PACKET_STAGE_DONE;
+    s_tx.sweep_phase_accumulator = 0U;
 
     if (mode == FSK_TX_MODE_PACKET)
     {
-        FskTx_BuildFrameBody();
         s_tx.packet_stage = PACKET_STAGE_PRE_SILENCE;
         s_tx.silence_symbols_remaining = FSK_TX_SILENCE_SYMBOLS;
     }
@@ -256,6 +358,8 @@ static int8_t FskTx_NextPacketSymbol(void)
                     --s_tx.silence_symbols_remaining;
                     return -1;
                 }
+                FskTx_LatchPacketTime();
+                FskTx_BuildFrameBody();
                 s_tx.packet_stage = PACKET_STAGE_PREAMBLE;
                 s_tx.packet_bit_index = 0U;
                 break;
@@ -314,10 +418,10 @@ static int8_t FskTx_NextSymbol(void)
 
     switch (s_tx.active_mode)
     {
-        case FSK_TX_MODE_TONE_1600:
+        case FSK_TX_MODE_TONE_1700:
             return 0;
 
-        case FSK_TX_MODE_TONE_2000:
+        case FSK_TX_MODE_TONE_1900:
             return 1;
 
         case FSK_TX_MODE_ALTERNATING_01:
@@ -377,9 +481,29 @@ static void FskTx_RenderHalf(uint16_t *destination)
     const int16_t *table;
     uint16_t table_length;
     uint16_t index;
-    int8_t symbol = FskTx_NextSymbol();
+    int8_t symbol;
 
-    if (symbol < 0)
+    if (s_tx.active_mode == FSK_TX_MODE_SWEEP_TONE)
+    {
+        for (index = 0U; index < FSK_TX_DMA_HALF_SAMPLES; ++index)
+        {
+            destination[index] = FskTx_ScaleSample(
+                FskTx_SineFromPhase(s_tx.sweep_phase_accumulator));
+            s_tx.sweep_phase_accumulator += s_tx.sweep_phase_increment;
+        }
+        ++s_tx.rendered_symbols;
+        return;
+    }
+
+    symbol = (s_tx.active_mode == FSK_TX_MODE_CARRIER_1800) ? 1 :
+             FskTx_NextSymbol();
+
+    if ((symbol < 0) ||
+        ((s_tx.modulation == FSK_TX_MODULATION_OOK) &&
+         ((s_tx.active_mode == FSK_TX_MODE_PACKET) ||
+          (s_tx.active_mode == FSK_TX_MODE_ALTERNATING_01) ||
+          (s_tx.active_mode == FSK_TX_MODE_PRBS)) &&
+         (symbol == 0)))
     {
         for (index = 0U; index < FSK_TX_DMA_HALF_SAMPLES; ++index)
         {
@@ -388,8 +512,20 @@ static void FskTx_RenderHalf(uint16_t *destination)
     }
     else
     {
-        table = (symbol == 0) ? s_sine_1600 : s_sine_2000;
-        table_length = (symbol == 0) ? 30U : 24U;
+        if ((s_tx.active_mode == FSK_TX_MODE_CARRIER_1800) ||
+            ((s_tx.modulation == FSK_TX_MODULATION_OOK) &&
+             ((s_tx.active_mode == FSK_TX_MODE_PACKET) ||
+              (s_tx.active_mode == FSK_TX_MODE_ALTERNATING_01) ||
+              (s_tx.active_mode == FSK_TX_MODE_PRBS))))
+        {
+            table = s_sine_1800_80;
+            table_length = FSK_TX_OOK_LUT_SAMPLES;
+        }
+        else
+        {
+            table = (symbol == 0) ? s_sine_bit0 : s_sine_bit1;
+            table_length = FSK_TX_SYMBOL_SAMPLES;
+        }
 
         for (index = 0U; index < FSK_TX_DMA_HALF_SAMPLES; ++index)
         {
@@ -451,9 +587,10 @@ FskTx_Result FskTx_Init(DAC_HandleTypeDef *hdac, TIM_HandleTypeDef *htim)
     s_tx.htim = htim;
     s_tx.amplitude = FSK_TX_DEFAULT_AMPLITUDE;
     s_tx.version = 1U;
-    s_tx.frame_type = 0U;
+    s_tx.frame_type = FSK_TX_FRAME_TYPE_DATA;
     s_tx.selected_mode = FSK_TX_MODE_SILENCE;
     s_tx.active_mode = FSK_TX_MODE_SILENCE;
+    s_tx.modulation = FSK_TX_MODULATION_FSK;
     s_tx.last_error = FSK_TX_OK;
     s_tx.timer_clock_hz = FskTx_GetTim4ClockHz();
 
@@ -589,14 +726,114 @@ FskTx_Result FskTx_SetFrameMetadata(uint8_t version,
     return FSK_TX_OK;
 }
 
+static uint8_t FskTx_IsLeapYear(uint16_t year)
+{
+    return (uint8_t)(((year % 4U) == 0U) &&
+                     (((year % 100U) != 0U) || ((year % 400U) == 0U)));
+}
+
+FskTx_Result FskTx_SetTime(uint16_t year,
+                          uint8_t month,
+                          uint8_t day,
+                          uint8_t hour,
+                          uint8_t minute,
+                          uint8_t second)
+{
+    static const uint8_t days_per_month[12] = {
+        31U, 28U, 31U, 30U, 31U, 30U, 31U, 31U, 30U, 31U, 30U, 31U
+    };
+    uint32_t days = 0U;
+    uint16_t current_year;
+    uint8_t current_month;
+    uint8_t maximum_day;
+    uint32_t primask;
+
+    if ((year < 1970U) || (year > 2099U) ||
+        (month < 1U) || (month > 12U) ||
+        (hour > 23U) || (minute > 59U) || (second > 59U))
+    {
+        return FSK_TX_ERROR_ARGUMENT;
+    }
+    maximum_day = days_per_month[month - 1U];
+    if ((month == 2U) && (FskTx_IsLeapYear(year) != 0U))
+    {
+        ++maximum_day;
+    }
+    if ((day < 1U) || (day > maximum_day))
+    {
+        return FSK_TX_ERROR_ARGUMENT;
+    }
+
+    for (current_year = 1970U; current_year < year; ++current_year)
+    {
+        days += (FskTx_IsLeapYear(current_year) != 0U) ? 366U : 365U;
+    }
+    for (current_month = 1U; current_month < month; ++current_month)
+    {
+        days += days_per_month[current_month - 1U];
+        if ((current_month == 2U) && (FskTx_IsLeapYear(year) != 0U))
+        {
+            ++days;
+        }
+    }
+    days += (uint32_t)(day - 1U);
+
+    primask = FskTx_EnterCritical();
+    s_tx.configured_time_s = (days * 86400UL) +
+                             ((uint32_t)hour * 3600UL) +
+                             ((uint32_t)minute * 60UL) + second;
+    s_tx.configured_tick_ms = HAL_GetTick();
+    s_tx.time_valid = 1U;
+    s_tx.time_base_pending = 1U;
+    s_tx.version = FSK_TX_PROTOCOL_VERSION_TIME;
+    FskTx_ExitCritical(primask);
+    return FSK_TX_OK;
+}
+
+FskTx_Result FskTx_RequestTimeBase(void)
+{
+    if (s_tx.time_valid == 0U)
+    {
+        return FSK_TX_ERROR_COMMAND;
+    }
+    s_tx.time_base_pending = 1U;
+    s_tx.version = FSK_TX_PROTOCOL_VERSION_TIME;
+    return FSK_TX_OK;
+}
+
 FskTx_Result FskTx_SelectMode(FskTx_Mode mode)
 {
-    if (mode > FSK_TX_MODE_PACKET)
+    if (mode > FSK_TX_MODE_CARRIER_1800)
     {
         return FSK_TX_ERROR_ARGUMENT;
     }
 
     s_tx.selected_mode = mode;
+    return FSK_TX_OK;
+}
+
+FskTx_Result FskTx_SelectModulation(FskTx_Modulation modulation)
+{
+    uint32_t primask;
+
+    if ((modulation != FSK_TX_MODULATION_FSK) &&
+        (modulation != FSK_TX_MODULATION_OOK))
+    {
+        return FSK_TX_ERROR_ARGUMENT;
+    }
+    if (s_tx.initialized == 0U)
+    {
+        return FSK_TX_ERROR_NOT_INITIALIZED;
+    }
+
+    primask = FskTx_EnterCritical();
+    if (s_tx.running != 0U)
+    {
+        FskTx_ExitCritical(primask);
+        return FSK_TX_ERROR_BUSY;
+    }
+    s_tx.modulation = modulation;
+    FskTx_ExitCritical(primask);
     return FSK_TX_OK;
 }
 
@@ -615,6 +852,15 @@ FskTx_Result FskTx_Start(void)
     {
         s_tx.last_error = FSK_TX_ERROR_SYNC_WORD_UNAVAILABLE;
         return FSK_TX_ERROR_SYNC_WORD_UNAVAILABLE;
+    }
+
+    if (s_tx.selected_mode == FSK_TX_MODE_PACKET)
+    {
+        s_tx.version = FSK_TX_PROTOCOL_VERSION_TIME;
+        s_tx.frame_type = (s_tx.time_base_pending != 0U)
+                              ? FSK_TX_FRAME_TYPE_TIME_BASE
+                              : FSK_TX_FRAME_TYPE_DATA;
+        s_tx.time_base_pending = 0U;
     }
 
     primask = FskTx_EnterCritical();
@@ -659,11 +905,20 @@ void FskTx_GetStatus(FskTx_Status *status)
     status->running = s_tx.running;
     status->selected_mode = s_tx.selected_mode;
     status->active_mode = s_tx.active_mode;
+    status->modulation = s_tx.modulation;
     status->amplitude = s_tx.amplitude;
     status->payload_length = s_tx.payload_length;
     status->version = s_tx.version;
     status->frame_type = s_tx.frame_type;
     status->sequence = s_tx.sequence;
+    status->time_valid = s_tx.time_valid;
+    status->time_base_pending = s_tx.time_base_pending;
+    status->configured_time_s = s_tx.configured_time_s;
+    status->base_time_s = s_tx.base_time_s;
+    status->elapsed_10ms = s_tx.elapsed_10ms;
+    status->frame_timestamp = s_tx.frame_timestamp;
+    status->sweep_sequence = s_tx.sweep_sequence;
+    status->sweep_frequency_hz = s_tx.sweep_frequency_hz;
     status->timer_clock_hz = s_tx.timer_clock_hz;
     status->sample_rate_hz = s_tx.sample_rate_hz;
     status->rendered_symbols = s_tx.rendered_symbols;
@@ -761,6 +1016,67 @@ static uint8_t FskTx_ParseUnsigned(const char *text,
 
     *value = parsed;
     return 1U;
+}
+
+static uint8_t FskTx_ParseUnsignedFields(const char *text,
+                                         uint32_t *fields,
+                                         uint8_t field_count)
+{
+    uint8_t index;
+
+    for (index = 0U; index < field_count; ++index)
+    {
+        uint32_t value = 0U;
+        uint8_t digit_seen = 0U;
+
+        text = FskTx_SkipSpaces(text);
+        while ((*text >= '0') && (*text <= '9'))
+        {
+            uint32_t digit = (uint32_t)(*text - '0');
+            if (value > ((UINT32_MAX - digit) / 10U))
+            {
+                return 0U;
+            }
+            value = (value * 10U) + digit;
+            digit_seen = 1U;
+            ++text;
+        }
+        if (digit_seen == 0U)
+        {
+            return 0U;
+        }
+        fields[index] = value;
+    }
+    return (*FskTx_SkipSpaces(text) == '\0') ? 1U : 0U;
+}
+
+static FskTx_Result FskTx_StartSweepTone(uint16_t sequence,
+                                         uint16_t frequency_hz,
+                                         uint16_t amplitude)
+{
+    FskTx_Result result;
+
+    if ((frequency_hz < FSK_TX_SWEEP_MIN_HZ) ||
+        (frequency_hz > FSK_TX_SWEEP_MAX_HZ) ||
+        (((frequency_hz - FSK_TX_SWEEP_MIN_HZ) %
+          FSK_TX_SWEEP_STEP_HZ) != 0U))
+    {
+        return FSK_TX_ERROR_ARGUMENT;
+    }
+
+    result = FskTx_SetAmplitude(amplitude);
+    if (result != FSK_TX_OK)
+    {
+        return result;
+    }
+    s_tx.sweep_sequence = sequence;
+    s_tx.sweep_frequency_hz = frequency_hz;
+    s_tx.sweep_phase_increment = (uint32_t)(
+        ((((uint64_t)frequency_hz << 32U) +
+          (FSK_TX_SAMPLE_RATE_HZ / 2U)) /
+         FSK_TX_SAMPLE_RATE_HZ));
+    s_tx.selected_mode = FSK_TX_MODE_SWEEP_TONE;
+    return FskTx_Start();
 }
 
 static int8_t FskTx_HexNibble(char value)
@@ -878,13 +1194,13 @@ static FskTx_Result FskTx_CommandMode(const char *argument)
     {
         return FskTx_SelectMode(FSK_TX_MODE_SILENCE);
     }
-    if (FskTx_ArgumentEquals(argument, "TONE1600") != 0U)
+    if (FskTx_ArgumentEquals(argument, "TONE1700") != 0U)
     {
-        return FskTx_SelectMode(FSK_TX_MODE_TONE_1600);
+        return FskTx_SelectMode(FSK_TX_MODE_TONE_1700);
     }
-    if (FskTx_ArgumentEquals(argument, "TONE2000") != 0U)
+    if (FskTx_ArgumentEquals(argument, "TONE1900") != 0U)
     {
-        return FskTx_SelectMode(FSK_TX_MODE_TONE_2000);
+        return FskTx_SelectMode(FSK_TX_MODE_TONE_1900);
     }
     if (FskTx_ArgumentEquals(argument, "ALT") != 0U)
     {
@@ -898,7 +1214,73 @@ static FskTx_Result FskTx_CommandMode(const char *argument)
     {
         return FskTx_SelectMode(FSK_TX_MODE_PACKET);
     }
+    if ((FskTx_ArgumentEquals(argument, "CARRIER") != 0U) ||
+        (FskTx_ArgumentEquals(argument, "CARRIER1800") != 0U))
+    {
+        return FskTx_SelectMode(FSK_TX_MODE_CARRIER_1800);
+    }
     return FSK_TX_ERROR_COMMAND;
+}
+
+static FskTx_Result FskTx_CommandModulation(const char *argument)
+{
+    if (FskTx_ArgumentEquals(argument, "FSK") != 0U)
+    {
+        return FskTx_SelectModulation(FSK_TX_MODULATION_FSK);
+    }
+    if (FskTx_ArgumentEquals(argument, "OOK") != 0U)
+    {
+        return FskTx_SelectModulation(FSK_TX_MODULATION_OOK);
+    }
+    return FSK_TX_ERROR_COMMAND;
+}
+
+static uint8_t FskTx_ParseSetTime(const char *text)
+{
+    uint32_t fields[6] = {0U};
+    uint8_t field = 0U;
+    uint8_t digits = 0U;
+
+    text = FskTx_SkipSpaces(text);
+    while (*text != '\0')
+    {
+        if ((*text >= '0') && (*text <= '9'))
+        {
+            if (digits >= 4U)
+            {
+                return 0U;
+            }
+            fields[field] = (fields[field] * 10U) +
+                            (uint32_t)(*text - '0');
+            ++digits;
+            ++text;
+            continue;
+        }
+        if (((*text == '-') && (field < 2U)) ||
+            ((*text == ':') && (field >= 2U) && (field < 5U)) ||
+            (*text == ' ' && field == 2U))
+        {
+            if (digits == 0U)
+            {
+                return 0U;
+            }
+            ++field;
+            digits = 0U;
+            ++text;
+            continue;
+        }
+        return 0U;
+    }
+    if ((field != 5U) || (digits == 0U))
+    {
+        return 0U;
+    }
+    return (FskTx_SetTime((uint16_t)fields[0],
+                          (uint8_t)fields[1],
+                          (uint8_t)fields[2],
+                          (uint8_t)fields[3],
+                          (uint8_t)fields[4],
+                          (uint8_t)fields[5]) == FSK_TX_OK) ? 1U : 0U;
 }
 
 FskTx_Result FskTx_HandleUartCommand(const char *line,
@@ -926,9 +1308,76 @@ FskTx_Result FskTx_HandleUartCommand(const char *line,
     {
         FskTx_ResponseSet(response, response_size,
                           "OK AMP n | PAYLOAD hex|- | META v t seq | "
-                          "MODE SILENCE|TONE1600|TONE2000|ALT|PRBS|PACKET | "
-                          "SEND | STOP | STATUS\r\n");
+                          "SET_TIME YYYY-MM-DD HH:MM:SS | TIME_BASE | "
+                          "MODE SILENCE|TONE1700|TONE1900|ALT|PRBS|PACKET|CARRIER|CARRIER1800 | "
+                          "MOD FSK|OOK | SWEEP INFO|TONE|OFF | SEND | STOP | STATUS\r\n");
         return FSK_TX_OK;
+    }
+    if (FskTx_TokenEquals(line, "SWEEP") != 0U)
+    {
+        const char *sweep_command = FskTx_AfterToken(line);
+
+        if (FskTx_ArgumentEquals(sweep_command, "INFO") != 0U)
+        {
+            FskTx_ResponseSet(response, response_size,
+                              "OK SWEEP INFO min=1500 max=2100 step=20 "
+                              "fs=48000 ampmax=2047\r\n");
+            return FSK_TX_OK;
+        }
+        if (FskTx_TokenEquals(sweep_command, "TONE") != 0U)
+        {
+            uint32_t fields[3];
+
+            if ((FskTx_ParseUnsignedFields(FskTx_AfterToken(sweep_command),
+                                           fields, 3U) == 0U) ||
+                (fields[0] > 65535U) ||
+                (fields[1] > 65535U) ||
+                (fields[2] > FSK_TX_MAX_AMPLITUDE))
+            {
+                FskTx_ResponseSet(response, response_size,
+                                  "ERR SWEEP ARG\r\n");
+                return FSK_TX_ERROR_ARGUMENT;
+            }
+            result = FskTx_StartSweepTone((uint16_t)fields[0],
+                                           (uint16_t)fields[1],
+                                           (uint16_t)fields[2]);
+            if (result != FSK_TX_OK)
+            {
+                FskTx_ResponseSet(response, response_size,
+                                  "ERR SWEEP RANGE\r\n");
+                return result;
+            }
+            used = 0U;
+            if ((response != NULL) && (response_size != 0U))
+            {
+                response[0] = '\0';
+            }
+            used = FskTx_AppendText(response, response_size, used,
+                                    "OK SWEEP TONE seq=");
+            used = FskTx_AppendUnsigned(response, response_size, used,
+                                        fields[0]);
+            used = FskTx_AppendText(response, response_size, used,
+                                    " freq=");
+            used = FskTx_AppendUnsigned(response, response_size, used,
+                                        fields[1]);
+            used = FskTx_AppendText(response, response_size, used,
+                                    " amp=");
+            used = FskTx_AppendUnsigned(response, response_size, used,
+                                        fields[2]);
+            (void)FskTx_AppendText(response, response_size, used, "\r\n");
+            return FSK_TX_OK;
+        }
+        if (FskTx_ArgumentEquals(sweep_command, "OFF") != 0U)
+        {
+            result = FskTx_Stop();
+            FskTx_ResponseSet(response, response_size,
+                              (result == FSK_TX_OK)
+                                  ? "OK SWEEP OFF\r\n"
+                                  : "ERR SWEEP OFF\r\n");
+            return result;
+        }
+        FskTx_ResponseSet(response, response_size, "ERR SWEEP COMMAND\r\n");
+        return FSK_TX_ERROR_COMMAND;
     }
     if (FskTx_TokenEquals(line, "AMP") != 0U)
     {
@@ -942,6 +1391,16 @@ FskTx_Result FskTx_HandleUartCommand(const char *line,
     else if (FskTx_TokenEquals(line, "PAYLOAD") != 0U)
     {
         result = FskTx_ParsePayload(FskTx_AfterToken(line));
+    }
+    else if (FskTx_TokenEquals(line, "SET_TIME") != 0U)
+    {
+        result = (FskTx_ParseSetTime(FskTx_AfterToken(line)) != 0U)
+                     ? FSK_TX_OK
+                     : FSK_TX_ERROR_COMMAND;
+    }
+    else if (FskTx_TokenEquals(line, "TIME_BASE") != 0U)
+    {
+        result = FskTx_RequestTimeBase();
     }
     else if (FskTx_TokenEquals(line, "META") != 0U)
     {
@@ -984,6 +1443,22 @@ FskTx_Result FskTx_HandleUartCommand(const char *line,
     {
         result = FskTx_CommandMode(FskTx_AfterToken(line));
     }
+    else if (FskTx_TokenEquals(line, "MOD") != 0U)
+    {
+        result = FskTx_CommandModulation(FskTx_AfterToken(line));
+        if (result == FSK_TX_OK)
+        {
+            FskTx_ResponseSet(response, response_size,
+                              (s_tx.modulation == FSK_TX_MODULATION_OOK)
+                                  ? "OK MOD OOK\r\n" : "OK MOD FSK\r\n");
+            return FSK_TX_OK;
+        }
+        if (result == FSK_TX_ERROR_BUSY)
+        {
+            FskTx_ResponseSet(response, response_size, "ERR busy\r\n");
+            return result;
+        }
+    }
     else if (FskTx_TokenEquals(line, "SEND") != 0U)
     {
         result = FskTx_Start();
@@ -1005,14 +1480,36 @@ FskTx_Result FskTx_HandleUartCommand(const char *line,
         used = FskTx_AppendText(response, response_size, used, " mode=");
         used = FskTx_AppendUnsigned(response, response_size, used,
                                     (uint32_t)status.active_mode);
+        used = FskTx_AppendText(response, response_size, used, " mod=");
+        used = FskTx_AppendText(response, response_size, used,
+                                 (status.modulation == FSK_TX_MODULATION_OOK)
+                                     ? "OOK" : "FSK");
         used = FskTx_AppendText(response, response_size, used, " amp=");
         used = FskTx_AppendUnsigned(response, response_size, used, status.amplitude);
         used = FskTx_AppendText(response, response_size, used, " len=");
         used = FskTx_AppendUnsigned(response, response_size, used,
                                     status.payload_length);
+        used = FskTx_AppendText(response, response_size, used, " time_valid=");
+        used = FskTx_AppendUnsigned(response, response_size, used,
+                                    status.time_valid);
+        used = FskTx_AppendText(response, response_size, used, " time_base_pending=");
+        used = FskTx_AppendUnsigned(response, response_size, used,
+                                    status.time_base_pending);
+        used = FskTx_AppendText(response, response_size, used, " base_s=");
+        used = FskTx_AppendUnsigned(response, response_size, used,
+                                    status.base_time_s);
+        used = FskTx_AppendText(response, response_size, used, " elapsed10=");
+        used = FskTx_AppendUnsigned(response, response_size, used,
+                                    status.elapsed_10ms);
         used = FskTx_AppendText(response, response_size, used, " fs=");
         used = FskTx_AppendUnsigned(response, response_size, used,
                                     status.sample_rate_hz);
+        used = FskTx_AppendText(response, response_size, used, " sweep_seq=");
+        used = FskTx_AppendUnsigned(response, response_size, used,
+                                    status.sweep_sequence);
+        used = FskTx_AppendText(response, response_size, used, " sweep_freq=");
+        used = FskTx_AppendUnsigned(response, response_size, used,
+                                    status.sweep_frequency_hz);
         used = FskTx_AppendText(response, response_size, used, " sync=");
         used = FskTx_AppendUnsigned(response, response_size, used,
                                     FSK_TX_SYNC_WORD_IS_FROZEN);

@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-// Non-coherent dual-tone correlator for 48 kSPS, 1.6/2.0 kHz 2FSK.
+// Non-coherent dual-tone correlator for 48 kSPS, 1.7/1.9 kHz 2FSK.
 // The history RAM contains the four products, so a true 480-sample sliding
 // window is updated with one add and one subtract for every accepted sample.
 module fsk_iq_correlator #(
@@ -37,7 +37,7 @@ module fsk_iq_correlator #(
     wire signed [COEFFICIENT_WIDTH-1:0] cos_f1;
     wire signed [COEFFICIENT_WIDTH-1:0] sin_f1;
 
-    reg [6:0] phase_index;
+    reg [8:0] phase_index;
 
     fsk_tone_rom tone_rom (
         .phase_index (phase_index),
@@ -253,7 +253,7 @@ module fsk_iq_correlator #(
 
     always @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
-            phase_index        <= 7'd0;
+            phase_index        <= 9'd0;
             window_pointer     <= 9'd0;
             fill_count         <= 9'd0;
             window_full        <= 1'b0;
@@ -375,10 +375,10 @@ module fsk_iq_correlator #(
                     (metric_step_count == (METRIC_STEP_SAMPLES-1)) &&
                     (window_full || (fill_count == (WINDOW_SAMPLES-1)));
 
-                if (phase_index == 7'd119)
-                    phase_index <= 7'd0;
+                if (phase_index == 9'd479)
+                    phase_index <= 9'd0;
                 else
-                    phase_index <= phase_index + 7'd1;
+                    phase_index <= phase_index + 9'd1;
 
                 if (window_pointer == (WINDOW_SAMPLES-1))
                     window_pointer <= 9'd0;

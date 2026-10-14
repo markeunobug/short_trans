@@ -1,6 +1,6 @@
 param(
     [string]$Compiler = "arm-none-eabi-gcc",
-    [ValidateSet("None", "Tone1600", "Tone2000", "Alt")]
+    [ValidateSet("None", "Tone1700", "Tone1900", "Alt")]
     [string]$BootMode = "None",
     [switch]$KeepBuildDirectory
 )
@@ -24,8 +24,8 @@ $includes = @(
 )
 $defines = @("-DUSE_HAL_DRIVER", "-DSTM32G431xx")
 switch ($BootMode) {
-    "Tone1600" { $defines += "-DFSK_TX_BOOT_TEST_TONE1600" }
-    "Tone2000" { $defines += "-DFSK_TX_BOOT_TEST_TONE2000" }
+    "Tone1700" { $defines += "-DFSK_TX_BOOT_TEST_TONE1700" }
+    "Tone1900" { $defines += "-DFSK_TX_BOOT_TEST_TONE1900" }
     "Alt"      { $defines += "-DFSK_TX_BOOT_TEST_ALT" }
 }
 $cpu = @("-mcpu=cortex-m4", "-mthumb")

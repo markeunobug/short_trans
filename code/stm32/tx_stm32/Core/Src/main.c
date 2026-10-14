@@ -53,7 +53,7 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 static char fsk_uart_line[160];
-static char fsk_uart_response[192];
+static char fsk_uart_response[320];
 static uint16_t fsk_uart_line_length;
 static rs485_half_duplex_t rs485a;
 static uint8_t fsk_uart_irq_byte;
@@ -173,11 +173,11 @@ int main(void)
     Error_Handler();
   }
 
-#if defined(FSK_TX_BOOT_TEST_TONE1600)
-  (void)FskTx_SelectMode(FSK_TX_MODE_TONE_1600);
+#if defined(FSK_TX_BOOT_TEST_TONE1700)
+  (void)FskTx_SelectMode(FSK_TX_MODE_TONE_1700);
   (void)FskTx_Start();
-#elif defined(FSK_TX_BOOT_TEST_TONE2000)
-  (void)FskTx_SelectMode(FSK_TX_MODE_TONE_2000);
+#elif defined(FSK_TX_BOOT_TEST_TONE1900)
+  (void)FskTx_SelectMode(FSK_TX_MODE_TONE_1900);
   (void)FskTx_Start();
 #elif defined(FSK_TX_BOOT_TEST_ALT)
   (void)FskTx_SelectMode(FSK_TX_MODE_ALTERNATING_01);
