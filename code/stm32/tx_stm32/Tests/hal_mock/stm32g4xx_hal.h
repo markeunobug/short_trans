@@ -16,6 +16,10 @@ typedef struct { uint32_t MasterOutputTrigger; uint32_t MasterSlaveMode; } TIM_M
 
 extern DAC_TypeDef mock_dac1;
 extern TIM_TypeDef mock_tim4;
+extern uint32_t mock_dac_start_dma_count;
+extern uint32_t mock_dac_stop_dma_count;
+extern uint32_t mock_tim_start_count;
+extern uint32_t mock_tim_stop_count;
 #define DAC1 (&mock_dac1)
 #define TIM4 (&mock_tim4)
 #define DAC_CHANNEL_1 1U

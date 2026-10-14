@@ -839,7 +839,6 @@ FskTx_Result FskTx_SelectModulation(FskTx_Modulation modulation)
 
 FskTx_Result FskTx_Start(void)
 {
-    FskTx_Result result;
     uint32_t primask;
 
     if (s_tx.initialized == 0U)
@@ -864,17 +863,16 @@ FskTx_Result FskTx_Start(void)
     }
 
     primask = FskTx_EnterCritical();
+    // Keep the DAC/DMA stream enabled to avoid output transients on each send.
     FskTx_ResetGenerator(s_tx.selected_mode);
     s_tx.running = (s_tx.selected_mode != FSK_TX_MODE_SILENCE) ? 1U : 0U;
-    result = FskTx_RestartDmaStream();
-    s_tx.last_error = result;
+    s_tx.last_error = FSK_TX_OK;
     FskTx_ExitCritical(primask);
-    return result;
+    return FSK_TX_OK;
 }
 
 FskTx_Result FskTx_Stop(void)
 {
-    FskTx_Result result;
     uint32_t primask;
 
     if (s_tx.initialized == 0U)
@@ -885,10 +883,9 @@ FskTx_Result FskTx_Stop(void)
     primask = FskTx_EnterCritical();
     s_tx.running = 0U;
     FskTx_ResetGenerator(FSK_TX_MODE_SILENCE);
-    result = FskTx_RestartDmaStream();
-    s_tx.last_error = result;
+    s_tx.last_error = FSK_TX_OK;
     FskTx_ExitCritical(primask);
-    return result;
+    return FSK_TX_OK;
 }
 
 void FskTx_GetStatus(FskTx_Status *status)
