@@ -11,12 +11,12 @@ import 'package:short_trans_host/trace_data.dart';
 import 'package:short_trans_host/trace_controller.dart';
 import 'package:short_trans_host/trace_view.dart';
 
-Uint8List fixture({int mode = 1, int count = 512, bool wrap = false}) {
+Uint8List fixture({int mode = 1, int count = 512, bool wrap = false, int firmware = 19}) {
   final b = Uint8List(64 + 48 * count);
   b.setAll(0, ascii.encode('DTR1'));
   final d = ByteData.sublistView(b);
   b[4] = 1;
-  b[5] = 19;
+  b[5] = firmware;
   b[6] = mode;
   b[7] = 12;
   b[8] = 64;
@@ -62,6 +62,10 @@ Uint8List fixture({int mode = 1, int count = 512, bool wrap = false}) {
 }
 
 void main() {
+  test('trace header accepts additive tuning firmware while keeping 0x13 captures', () {
+    expect(TraceCapture.parse(fixture(count: 1, firmware: 19)).records, hasLength(1));
+    expect(TraceCapture.parse(fixture(count: 1, firmware: 20)).records, hasLength(1));
+  });
   test('CRC known vector, signed 33-bit domain and sample rollover', () {
     expect(traceCrc16(ascii.encode('123456789')), 0x29b1);
     final b = fixture(count: 2, wrap: true);
@@ -71,6 +75,8 @@ void main() {
     expect(c.records.first.noise, 8589934591);
     expect(c.records.first.soft, -4294967295);
     expect(c.timeMs(c.records.first), -1);
+    expect(c.offsetUnits, 200);
+    expect(c.toCsv(), contains('fsk_offset_energy=51200'));
     expect(c.toCsv(), contains('-4294967295'));
   });
   test(
@@ -169,6 +175,33 @@ void main() {
     await changed.start(16, 128);
     expect(changed.capture, isNull);
     expect(changed.status, contains('编号变化'));
+  });
+  testWidgets('trace trigger selections survive view remounts', (tester) async {
+    final controller = TraceController(
+      command: (_) async => 'OK TRACE ACK',
+      readBlock: (_, _, _) async => Uint8List(0),
+      changed: () {},
+    );
+    Widget view() => MaterialApp(
+      home: Scaffold(body: TraceView(controller: controller, connected: true)),
+    );
+
+    await tester.pumpWidget(view());
+    await tester.tap(find.byType(DropdownButtonFormField<int>).at(0));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('载波出现').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<int>).at(1));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('256').last);
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(view());
+    expect(controller.triggerMask, 2);
+    expect(controller.postTriggerMs, 256);
+    expect(find.text('载波出现'), findsOneWidget);
+    expect(find.text('256'), findsOneWidget);
   });
   for (final mode in [1, 2]) {
     for (final width in [1360.0, 390.0]) {

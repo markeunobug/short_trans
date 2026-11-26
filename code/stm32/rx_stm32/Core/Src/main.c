@@ -26,6 +26,7 @@
 #include "rs485_half_duplex.h"
 #include "rx_command_text.h"
 #include "rx_trace.h"
+#include "rx_ber.h"
 #include <string.h>
 /* USER CODE END Includes */
 
@@ -283,6 +284,98 @@ static uint8_t Rs485A_AskSupported(void)
          1U : 0U;
 }
 
+static uint8_t Rs485A_FskTuningSupported(void)
+{
+  return ((fpga_rx_connected != 0U) &&
+          (fpga_rx_firmware_version >= FPGA_RX_SPI_FSK_TUNING_MIN_FW_VERSION) &&
+          (fpga_rx_firmware_version != 0xFFU)) ? 1U : 0U;
+}
+
+static void Rs485A_SendFskStatus(const fpga_rx_spi_fsk_status_t *status)
+{
+  size_t used = 0U;
+
+  rs485a_response[0] = '\0';
+  used = Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                           "OK FSK STATUS margin=");
+  used = rx_command_append_u32(rs485a_response, sizeof(rs485a_response), used,
+                               status->active.energy_margin_q4_4);
+  used = Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                           " offset=");
+  used = rx_command_append_u32(rs485a_response, sizeof(rs485a_response), used,
+                               status->active.noise_offset_units);
+  used = Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                           " pending=");
+  used = rx_command_append_u32(rs485a_response, sizeof(rs485a_response), used,
+                               status->pending);
+  used = Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                           " error=");
+  used = rx_command_append_u32(rs485a_response, sizeof(rs485a_response), used,
+                               status->error);
+  used = Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                           " busy=");
+  used = rx_command_append_u32(rs485a_response, sizeof(rs485a_response), used,
+                               status->rx_busy);
+  used = Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                           " sweep=");
+  used = rx_command_append_u32(rs485a_response, sizeof(rs485a_response), used,
+                               status->sweep_active);
+  used = Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                           " mode=");
+  used = rx_command_append_u32(rs485a_response, sizeof(rs485a_response), used,
+                               status->mode);
+  used = Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                           " generation=");
+  used = rx_command_append_u32(rs485a_response, sizeof(rs485a_response), used,
+                               status->generation);
+  (void)Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                          "\r\n");
+  Rs485A_SendText(rs485a_response);
+}
+
+static void Rs485A_HandleFskThreshold(const char *arguments)
+{
+  uint32_t fields[2];
+  fpga_rx_spi_fsk_config_t config;
+  fpga_rx_spi_fsk_status_t status;
+  size_t used = 0U;
+
+  if ((rx_command_parse_u32_fields(arguments, fields, 2U) == 0U) ||
+      (fields[0] == 0U) || (fields[0] > 255U) || (fields[1] > 65535U))
+  {
+    Rs485A_SendText("ERR FSK THRESH ARG\r\n");
+    return;
+  }
+  if (Rs485A_FskTuningSupported() == 0U)
+  {
+    Rs485A_SendText("ERR FSK UNSUPPORTED\r\n");
+    return;
+  }
+  config.energy_margin_q4_4 = (uint8_t)fields[0];
+  config.noise_offset_units = (uint16_t)fields[1];
+  if (fpga_rx_spi_fsk_apply_config(&fpga_rx, &config, &status) != FPGA_RX_SPI_OK)
+  {
+    Rs485A_SendText("ERR FSK APPLY\r\n");
+    return;
+  }
+
+  rs485a_response[0] = '\0';
+  used = Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                           "OK FSK THRESH margin=");
+  used = rx_command_append_u32(rs485a_response, sizeof(rs485a_response), used,
+                               fields[0]);
+  used = Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                           " offset=");
+  used = rx_command_append_u32(rs485a_response, sizeof(rs485a_response), used,
+                               fields[1]);
+  used = Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                           " pending=");
+  used = rx_command_append_u32(rs485a_response, sizeof(rs485a_response), used,
+                               status.pending);
+  (void)Rs485A_AppendText(rs485a_response, sizeof(rs485a_response), used,
+                          "\r\n");
+  Rs485A_SendText(rs485a_response);
+}
 static const char *Rs485A_ModeName(uint8_t mode)
 {
   return (mode == (uint8_t)FPGA_RX_SPI_MODE_OOK) ? "OOK" : "FSK";
@@ -455,6 +548,14 @@ static void Rs485A_HandleLine(const char *line)
   size_t used;
   uint8_t index;
 
+  size_t ber_length = rx_ber_command(&fpga_rx, line,
+      (uint8_t *)rs485a_response, sizeof rs485a_response);
+  if (ber_length != 0U)
+  {
+    if (rs485_half_duplex_transmit(&rs485a, (const uint8_t *)rs485a_response,
+        (uint16_t)ber_length, 100U) != HAL_OK) ++rs485a_tx_error_count;
+    return;
+  }
   size_t trace_length = rx_trace_command(&fpga_rx, line,
       (uint8_t *)rs485a_response, sizeof rs485a_response);
   if (trace_length != 0U)
@@ -473,7 +574,9 @@ static void Rs485A_HandleLine(const char *line)
   {
     Rs485A_SendText("OK PING | STATUS | READ | CLEAR_ERRORS | "
                     "MOD FSK|OOK | ASK THRESH <low> <high>|STATUS | "
-                    "SWEEP INFO|MEASURE|STOP | TRACE ARM|TRIGGER|STATUS|READ|STOP | HELP\r\n");
+                    "FSK THRESH <margin_q4_4> <offset_units>|STATUS | "
+                    "SWEEP INFO|MEASURE|STOP | TRACE ARM|TRIGGER|STATUS|READ|STOP | "
+                    "BER START|STOP|CLEAR|STATUS|HEALTH|READ|POP <id> | BER OBS INFO|ARM|STOP|READ|PAGE <0..15> | HELP\r\n");
     return;
   }
 
@@ -495,6 +598,23 @@ static void Rs485A_HandleLine(const char *line)
     return;
   }
 
+  if (strncmp(line, "FSK THRESH ", 11U) == 0)
+  {
+    Rs485A_HandleFskThreshold(&line[11]);
+    return;
+  }
+
+  if (strcmp(line, "FSK STATUS") == 0)
+  {
+    fpga_rx_spi_fsk_status_t status;
+    if (Rs485A_FskTuningSupported() == 0U)
+      Rs485A_SendText("ERR FSK UNSUPPORTED\r\n");
+    else if (fpga_rx_spi_fsk_read_status(&fpga_rx, &status) != FPGA_RX_SPI_OK)
+      Rs485A_SendText("ERR FSK STATUS\r\n");
+    else
+      Rs485A_SendFskStatus(&status);
+    return;
+  }
   if (strcmp(line, "ASK STATUS") == 0)
   {
     fpga_rx_spi_ask_status_t status;

@@ -11,7 +11,8 @@ module fsk_symbol_sync #(
     parameter integer PREAMBLE_MIN_MATCHES = 14,
     parameter integer PREAMBLE_MIN_CARRIER_HITS = 14,
     parameter [CONFIDENCE_WIDTH-1:0] TIMING_HYSTERESIS = 8'd4,
-    parameter integer LOCK_TIMEOUT_SYMBOLS = 100
+    parameter integer LOCK_TIMEOUT_SYMBOLS = 100,
+    parameter integer SYNC_TIMEOUT_SYMBOLS = 24
 ) (
     input  wire                              clk,
     input  wire                              reset_n,
@@ -21,7 +22,10 @@ module fsk_symbol_sync #(
     input  wire [CONFIDENCE_WIDTH-1:0]       confidence,
     input  wire                              carrier_present,
     input  wire [CONFIDENCE_WIDTH-1:0]       preamble_confidence_threshold,
+    input  wire                              frame_sync_found,
+    input  wire                              frame_end,
 
+    output wire [1:0]                        debug_state,
     output wire                              carrier_active,
     output wire                              sync_locked,
     output reg                               preamble_detected,
@@ -69,6 +73,9 @@ module fsk_symbol_sync #(
     localparam [1:0] ST_CARRIER = 2'd0;
     localparam [1:0] ST_SEARCH  = 2'd1;
     localparam [1:0] ST_LOCKED  = 2'd2;
+    localparam [1:0] ST_WAIT_IDLE = 2'd3;
+    localparam [4:0] REARM_LAST_METRIC = 5'd31;
+    localparam [3:0] REARM_LAST_LOW_METRIC = 4'd9;
 
     reg [1:0] state;
     reg [2:0] carrier_run;
@@ -100,6 +107,9 @@ module fsk_symbol_sync #(
     reg early_confidence_valid;
     reg [1:0] low_energy_symbols;
     reg [LOCK_COUNT_WIDTH-1:0] locked_symbol_count;
+    reg frame_sync_seen;
+    reg [4:0] rearm_metric_count;
+    reg [3:0] rearm_low_count;
 
     integer reset_index;
     function [SAMPLE_COUNT_WIDTH-1:0] count_matches;
@@ -146,6 +156,7 @@ module fsk_symbol_sync #(
         (best_phase - last_metric_phase) :
         (PHASE_COUNT - last_metric_phase + best_phase);
 
+    assign debug_state = state;
     assign carrier_active = (state != ST_CARRIER);
     assign sync_locked = (state == ST_LOCKED);
 
@@ -173,6 +184,9 @@ module fsk_symbol_sync #(
             early_confidence_valid        <= 1'b0;
             low_energy_symbols            <= 2'd0;
             locked_symbol_count           <= {LOCK_COUNT_WIDTH{1'b0}};
+            frame_sync_seen               <= 1'b0;
+            rearm_metric_count            <= 5'd0;
+            rearm_low_count               <= 4'd0;
             preamble_detected             <= 1'b0;
             lock_lost                     <= 1'b0;
             search_timeout                <= 1'b0;
@@ -264,6 +278,7 @@ module fsk_symbol_sync #(
                             previous_bit             <= phase_bits[best_phase][0];
                             low_energy_symbols       <= 2'd0;
                             locked_symbol_count      <= {LOCK_COUNT_WIDTH{1'b0}};
+                            frame_sync_seen          <= 1'b0;
                             awaiting_late_metric     <= 1'b0;
                             transition_pending       <= 1'b0;
                             early_confidence         <= last_metric_confidence;
@@ -307,7 +322,14 @@ module fsk_symbol_sync #(
                 end
 
                 ST_LOCKED: begin
-                    if (metric_valid) begin
+                    if (frame_sync_found)
+                        frame_sync_seen <= 1'b1;
+
+                    if (frame_end) begin
+                        state                <= ST_WAIT_IDLE;
+                        rearm_metric_count   <= 5'd0;
+                        rearm_low_count      <= 4'd0;
+                    end else if (metric_valid) begin
                         if (awaiting_late_metric) begin
                             awaiting_late_metric <= 1'b0;
                             transition_pending   <= 1'b0;
@@ -343,6 +365,16 @@ module fsk_symbol_sync #(
                                     awaiting_late_metric    <= 1'b0;
                                     transition_pending      <= 1'b0;
                                     early_confidence_valid  <= 1'b0;
+                                end else if ((SYNC_TIMEOUT_SYMBOLS != 0) &&
+                                             !frame_sync_seen && !frame_sync_found &&
+                                             (locked_symbol_count == SYNC_TIMEOUT_SYMBOLS)) begin
+                                    // Check before the next bit, after the parser has
+                                    // had time to match the last permitted bit.
+                                    state               <= ST_WAIT_IDLE;
+                                    rearm_metric_count  <= 5'd0;
+                                    rearm_low_count     <= 4'd0;
+                                    lock_lost           <= 1'b1;
+                                    search_timeout      <= 1'b1;
                                 end else begin
                                     bit_valid          <= 1'b1;
                                     bit_value          <= hard_bit;
@@ -368,6 +400,24 @@ module fsk_symbol_sync #(
                             end else begin
                                 symbol_countdown <= symbol_countdown - 1'b1;
                             end
+                        end
+                    end
+                end
+
+                ST_WAIT_IDLE: begin
+                    if (metric_valid) begin
+                        // Wait for 10 quiet metrics, but retry acquisition
+                        // after 32 metrics even if the carrier stays high.
+                        if ((rearm_metric_count == REARM_LAST_METRIC) ||
+                            (!carrier_present && (rearm_low_count == REARM_LAST_LOW_METRIC))) begin
+                            state       <= ST_CARRIER;
+                            carrier_run <= 3'd0;
+                        end else begin
+                            rearm_metric_count <= rearm_metric_count + 1'b1;
+                            if (carrier_present)
+                                rearm_low_count <= 4'd0;
+                            else
+                                rearm_low_count <= rearm_low_count + 1'b1;
                         end
                     end
                 end

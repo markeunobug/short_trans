@@ -51,12 +51,16 @@ int main(int argc,char **argv)
     fpga_rx_spi_t dev;
     fpga_rx_spi_bus_t bus={transfer,cs,&m,100};
     uint8_t out[384],raw[384];size_t n,k;
-    m.reg[0]=0xa7;m.reg[1]=0x13;m.reg[0x32]=0xd1;m.arm_status=1;
+    m.reg[0]=0xa7;m.reg[1]=0x14;m.reg[0x32]=0xd1;m.arm_status=1;
     m.reg[0x37]=6;m.reg[0x38]=8;m.reg[0x3c]=1;m.reg[0x3e]=5;
     for(k=0;k<sizeof m.capture;k++) m.capture[k]=(uint8_t)k;
     assert(fpga_rx_spi_init(&dev,&bus)==FPGA_RX_SPI_OK);
     assert(rx_trace_crc16((const uint8_t *)"123456789",9)==0x29b1);
     assert(rx_trace_command(&dev,"STATUS",out,sizeof out)==0);
+    m.reg[1]=0x13;
+    n=rx_trace_command(&dev,"TRACE STATUS",out,sizeof out);
+    assert(n && strstr((char *)out,"status=6"));
+    m.reg[1]=0x14;
     n=rx_trace_command(&dev,"TRACE STATUS",out,sizeof out);
     assert(n && strstr((char *)out,"id=1 count=8"));
     n=rx_trace_command(&dev,"TRACE READ 1 60 192",out,sizeof out);
@@ -81,7 +85,7 @@ int main(int argc,char **argv)
     m.reg[1]=0x12;size_t writes=m.writes;
     rx_trace_command(&dev,"TRACE ARM 1 0",out,sizeof out);
     assert(memcmp(out,"ERR TRACE UNSUPPORTED",21)==0 && m.writes==writes);
-    m.reg[1]=0x13;m.fail=1;
+    m.reg[1]=0x14;m.fail=1;
     rx_trace_command(&dev,"TRACE STATUS",out,sizeof out);assert(memcmp(out,"ERR",3)==0);
     m.fail=0;
     if(argc==3) {

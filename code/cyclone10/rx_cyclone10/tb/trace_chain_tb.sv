@@ -19,7 +19,7 @@ module trace_chain_tb;
     reg [31:0] expected_oe,expected_e0,expected_e1;
     reg [32:0] expected_noise,expected_threshold;
     reg [31:0] expected_flags;
-    wire [31:0] flags={15'd0,(oe>=600),ready,10'd0,bit_value,1'b0,locked,locked,hb};
+    wire [31:0] flags={15'd0,(oe>=600),ready,10'd0,bit_value,1'b0,locked,(ready&&hb),hb};
     wire [31:0] events={25'd0,lost,pre,5'd0};
     wire [31:0] fflags={13'd0,fc_ok,1'b0,above,nr,10'd0,fb,1'b0,flock,fc,fh};
     wire [31:0] fevents={18'd0,ftime,6'd0,flost,fpre,5'd0};
@@ -28,7 +28,7 @@ module trace_chain_tb;
         .parser_busy(1'b0),.hard_bit(hb),.bit_valid(bv),.bit_value(bit_value),.symbol_locked(locked),.candidate_active(candidate),
         .preamble_detected(pre),.lock_lost(lost),.selected_phase(phase));
     fsk_demod_core fsk(.clk(clk),.reset_n(reset_n),.sample_valid(sv),.sample_data(sample),.noise_track_enable(!fc),.carrier_active(fc),
-        .noise_multiplier_q4_4(8'd64),.noise_offset(33'd200),.confidence_threshold(8'd32),.metric_valid(fv),.hard_bit(fh),
+        .noise_multiplier_q4_4(8'd64),.noise_offset(16'd200),.confidence_threshold(8'd32),.metric_valid(fv),.hard_bit(fh),
         .soft_metric(fs),.total_energy(total),.confidence(confidence),.confidence_ok(fc_ok),.energy_f0(e0),.energy_f1(e1),
         .noise_energy(noise),.carrier_threshold(threshold),.energy_above_threshold(above),.noise_ready(nr),.noise_update(nu));
     fsk_symbol_sync fss(.clk(clk),.reset_n(reset_n),.metric_valid(fv),.hard_bit(fh),.total_energy(total),.confidence(confidence),

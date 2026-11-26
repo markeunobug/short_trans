@@ -57,6 +57,12 @@ def main() -> None:
     assert 'strcmp(line, "MOD OOK")' in main_source
     assert 'strncmp(line, "ASK THRESH ", 11U)' in main_source
     assert 'strcmp(line, "ASK STATUS")' in main_source
+    assert 'strncmp(line, "FSK THRESH ", 11U)' in main_source
+    assert 'strcmp(line, "FSK STATUS")' in main_source
+    assert 'fpga_rx_spi_fsk_apply_config(&fpga_rx, &config, &status)' in main_source
+    assert 'strncmp(line, "FSK THRESH ", 11U)' in main_source
+    assert 'strcmp(line, "FSK STATUS")' in main_source
+    assert 'fpga_rx_spi_fsk_apply_config(&fpga_rx, &config, &status)' in main_source
     assert 'ERR ASK UNSUPPORTED' in main_source
     assert 'ERR MOD UNSUPPORTED' in main_source
     assert 'OK ASK STATUS mode=' in main_source

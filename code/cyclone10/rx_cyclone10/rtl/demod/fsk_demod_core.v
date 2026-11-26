@@ -10,7 +10,7 @@ module fsk_demod_core (
     input  wire                  noise_track_enable,
     input  wire                  carrier_active,
     input  wire [7:0]            noise_multiplier_q4_4,
-    input  wire [32:0]           noise_offset,
+    input  wire [15:0]           noise_offset,
     input  wire [7:0]            confidence_threshold,
     output wire                  metric_valid,
     output wire                  hard_bit,

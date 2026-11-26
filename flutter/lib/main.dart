@@ -4,6 +4,11 @@ import 'ask_controls.dart';
 import 'trace_data.dart';
 import 'trace_controller.dart';
 import 'trace_view.dart';
+import 'ber_controller.dart';
+import 'ber_view.dart';
+import 'power_scan_controller.dart';
+import 'power_scan_view.dart';
+import 'ber_command_writer.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -285,7 +290,12 @@ String formatDeviceTimestamp(int? timestampMs) {
 }
 
 class SerialChannel {
-  SerialChannel({required this.onLine, this.onBlock}) {
+  SerialChannel({
+    required this.onLine,
+    this.onBlock,
+    this.onBytes,
+    this.onSubmit,
+  }) {
     _decoder = TraceSerialDecoder(
       onLine: onLine,
       onBlock: (bytes) => onBlock?.call(bytes),
@@ -293,6 +303,8 @@ class SerialChannel {
   }
   final void Function(String) onLine;
   final void Function(Uint8List)? onBlock;
+  final void Function(Uint8List)? onBytes;
+  final void Function(List<int>)? onSubmit;
   late final TraceSerialDecoder _decoder;
   void resetFraming() => _decoder.clear();
   SerialPort? _port;
@@ -319,6 +331,7 @@ class SerialChannel {
         512,
         timeout: const Duration(milliseconds: 5),
       );
+      onBytes?.call(bytes);
       _decoder.add(bytes);
     } catch (_) {
       // Short non-blocking reads can time out while no bytes are available.
@@ -327,10 +340,31 @@ class SerialChannel {
     }
   }
 
-  Future<void> writeLine(String line) async {
+  Future<void> writeLine(
+    String line, {
+    bool berPaced = false,
+    bool cancelPartialLine = false,
+  }) async {
     final port = _port;
     if (port == null || !port.isOpened) throw StateError('串口未打开');
-    await port.writeBytesFromString('$line\n', includeZeroTerminator: false);
+    if (berPaced) {
+      await writeBerCommand(
+        line,
+        write: (chunk) =>
+            port.writeBytesFromString(chunk, includeZeroTerminator: false),
+        submitted: onSubmit,
+        cancelPartialLine: cancelPartialLine,
+      );
+      return;
+    }
+    if (cancelPartialLine) throw StateError('清除未完成行必须使用BER逐字节发送');
+    final completed = await port.writeBytesFromString(
+      '$line\n',
+      includeZeroTerminator: false,
+    );
+    if (!completed) {
+      throw StateError('串口写入未确认完成；不会自动重发：$line');
+    }
   }
 
   Future<void> close() async {
@@ -354,6 +388,19 @@ class _HostPageState extends State<HostPage> {
   late final SerialChannel _tx;
   late final SerialChannel _rx;
   late final TraceController _trace;
+  late final BerController _ber;
+  late final PowerScanController _power;
+  bool get _testBusy => _ber.running || _power.running || _power.applying;
+  bool get _canStartMeasurement =>
+      _txOpen &&
+      _rxOpen &&
+      _txPort != _rxPort &&
+      !_sweepRunning &&
+      !_trace.running &&
+      !_askConfigBusy &&
+      !_testBusy &&
+      _txReply == null &&
+      _rxReply == null;
   List<String> _ports = [];
   String? _txPort;
   String? _rxPort;
@@ -390,12 +437,16 @@ class _HostPageState extends State<HostPage> {
   void initState() {
     super.initState();
     _tx = SerialChannel(
+      onBytes: (bytes) => _ber.raw(true, bytes),
+      onSubmit: (bytes) => _ber.rawTransmit(true, bytes),
       onLine: (line) {
         _addLog(_txLogs, 'RX', line);
         _parseTxResponse(line);
       },
     );
     _rx = SerialChannel(
+      onBytes: (bytes) => _ber.raw(false, bytes),
+      onSubmit: (bytes) => _ber.rawTransmit(false, bytes),
       onBlock: (bytes) {
         try {
           final block = TraceBlock.parse(bytes);
@@ -434,6 +485,44 @@ class _HostPageState extends State<HostPage> {
         if (reply.startsWith('ERR')) throw StateError(reply);
         return base64Decode(reply.substring(prefix.length));
       },
+      changed: () {
+        if (mounted) setState(() {});
+      },
+    );
+    final berClock = Stopwatch()..start();
+    _ber = BerController(
+      command: (isTx, cmd) => _request(
+        isTx,
+        cmd,
+        matcher: (line) => line.startsWith('OK') || line.startsWith('ERR'),
+        timeout: const Duration(seconds: 2),
+        strictWrite: true,
+      ),
+      emergencyStop: (isTx, cmd) => (isTx ? _tx : _rx).writeLine(
+        cmd,
+        berPaced: true,
+        cancelPartialLine: true,
+      ),
+      invalidateConnections: () async {
+        await _tx.close();
+        await _rx.close();
+        if (mounted) {
+          setState(() {
+            _txOpen = false;
+            _rxOpen = false;
+            _txStatus = '响应未决，请重连';
+            _rxStatus = '响应未决，请重连';
+          });
+        }
+      },
+      auditFactory: () => BerFileAudit(Directory('exports/ber')),
+      now: () => berClock.elapsed,
+      changed: () {
+        if (mounted) setState(() {});
+      },
+    );
+    _power = PowerScanController(
+      ber: _ber,
       changed: () {
         if (mounted) setState(() {});
       },
@@ -518,6 +607,7 @@ class _HostPageState extends State<HostPage> {
     String command, {
     required bool Function(String) matcher,
     Duration timeout = const Duration(seconds: 3),
+    bool strictWrite = false,
   }) async {
     if (isTx ? _txReply != null : _rxReply != null) {
       throw StateError('${isTx ? 'TX' : 'RX'} 正在等待上一条命令');
@@ -531,7 +621,7 @@ class _HostPageState extends State<HostPage> {
       _rxReplyMatcher = matcher;
     }
     try {
-      await _send(isTx, command);
+      await _send(isTx, command, strictWrite: strictWrite);
       return await completer.future.timeout(timeout);
     } finally {
       if (isTx && identical(_txReply, completer)) {
@@ -556,13 +646,15 @@ class _HostPageState extends State<HostPage> {
 
   void _addLog(List<CommandLog> target, String direction, String text) {
     if (mounted) {
-      setState(
-        () => target.insert(0, CommandLog(DateTime.now(), direction, text)),
-      );
+      setState(() {
+        target.insert(0, CommandLog(DateTime.now(), direction, text));
+        if (_testBusy && target.length > 2000) target.removeLast();
+      });
     }
   }
 
   Future<void> _toggle(bool isTx) async {
+    if (_testBusy) return;
     final name = isTx ? _txPort : _rxPort;
     if (name == null) return;
     final channel = isTx ? _tx : _rx;
@@ -593,18 +685,21 @@ class _HostPageState extends State<HostPage> {
             'PING',
             matcher: (line) => line.trim() == 'OK PONG',
             timeout: const Duration(milliseconds: 1500),
+            strictWrite: true,
           );
           await _request(
             false,
             'STATUS',
             matcher: (line) => line.startsWith('OK ') && line.contains('fpga='),
             timeout: const Duration(seconds: 2),
+            strictWrite: true,
           );
           setState(() {
             _rxOpen = true;
             _rxStatus = '已连接';
           });
         }
+        _ber.connectionOpened(isTx);
       }
     } catch (e) {
       await channel.close();
@@ -621,11 +716,22 @@ class _HostPageState extends State<HostPage> {
     }
   }
 
-  Future<void> _send(bool isTx, String command) async {
+  Future<void> _send(
+    bool isTx,
+    String command, {
+    bool strictWrite = false,
+  }) async {
+    if (!strictWrite && (_testBusy || _ber.requiresReconnect)) {
+      _showError('测量正在运行或串口响应未决，请先停止/重连');
+      return;
+    }
     final logs = isTx ? _txLogs : _rxLogs;
     _addLog(logs, 'TX', command);
     try {
-      await (isTx ? _tx : _rx).writeLine(command);
+      await (isTx ? _tx : _rx).writeLine(
+        command,
+        berPaced: strictWrite && _testBusy,
+      );
       if (isTx) {
         final payloadMatch = RegExp(r'^PAYLOAD\s+(.+)$').firstMatch(command);
         if (payloadMatch != null) {
@@ -654,6 +760,9 @@ class _HostPageState extends State<HostPage> {
         if (isTimeBase) _txTimeBasePending = false;
       }
     } catch (e) {
+      if (strictWrite) {
+        rethrow;
+      }
       _showError(e.toString());
     }
   }
@@ -662,7 +771,12 @@ class _HostPageState extends State<HostPage> {
     required bool baseline,
     required int amplitude,
   }) async {
-    if (_sweepRunning || _askConfigBusy) return;
+    if (_sweepRunning ||
+        _askConfigBusy ||
+        _testBusy ||
+        _ber.requiresReconnect) {
+      return;
+    }
     if (!_txOpen || !_rxOpen) {
       _showError('扫频需要同时连接 TX 和 RX');
       return;
@@ -840,6 +954,12 @@ class _HostPageState extends State<HostPage> {
 
   @override
   void dispose() {
+    _power.stop();
+    _ber.stopRequested = true;
+    if (_testBusy) {
+      unawaited(_tx.writeLine('STOP').catchError((Object _) {}));
+      unawaited(_rx.writeLine('BER STOP').catchError((Object _) {}));
+    }
     _trace.stopRequested = true;
     _tx.close();
     _rx.close();
@@ -856,11 +976,16 @@ class _HostPageState extends State<HostPage> {
             ? '幅频响应扫描'
             : _pageIndex == 2
             ? '调制与门限设置'
-            : '解调观测',
+            : _pageIndex == 3
+            ? '解调观测'
+            : _pageIndex == 4
+            ? 'FSK 误码率调试'
+            : '最佳发射幅度测试',
       ),
       actions: [
         IconButton(
-          onPressed: _askConfigBusy || _trace.running
+          onPressed:
+              _askConfigBusy || _sweepRunning || _trace.running || _testBusy
               ? null
               : () => setState(() => _pageIndex = 0),
           icon: Icon(
@@ -872,7 +997,8 @@ class _HostPageState extends State<HostPage> {
           tooltip: '通信',
         ),
         IconButton(
-          onPressed: _askConfigBusy || _trace.running
+          onPressed:
+              _askConfigBusy || _sweepRunning || _trace.running || _testBusy
               ? null
               : () => setState(() => _pageIndex = 1),
           icon: Icon(
@@ -884,21 +1010,49 @@ class _HostPageState extends State<HostPage> {
           tooltip: '扫频',
         ),
         IconButton(
-          onPressed: _askConfigBusy || _trace.running
+          onPressed:
+              _askConfigBusy || _sweepRunning || _trace.running || _testBusy
               ? null
               : () => setState(() => _pageIndex = 2),
           icon: const Icon(Icons.tune),
           tooltip: '调制与门限',
         ),
         IconButton(
-          onPressed: _askConfigBusy || _sweepRunning
+          onPressed:
+              _askConfigBusy || _sweepRunning || _trace.running || _testBusy
               ? null
               : () => setState(() => _pageIndex = 3),
           icon: const Icon(Icons.monitor_heart_outlined),
           tooltip: '解调观测',
         ),
         IconButton(
-          onPressed: _refreshPorts,
+          onPressed:
+              _askConfigBusy || _sweepRunning || _trace.running || _testBusy
+              ? null
+              : () => setState(() => _pageIndex = 4),
+          icon: Icon(
+            Icons.fact_check_outlined,
+            color: _pageIndex == 4
+                ? Theme.of(context).colorScheme.primary
+                : null,
+          ),
+          tooltip: 'BER 误码率',
+        ),
+        IconButton(
+          onPressed:
+              _askConfigBusy || _sweepRunning || _trace.running || _testBusy
+              ? null
+              : () => setState(() => _pageIndex = 5),
+          icon: Icon(
+            Icons.bolt,
+            color: _pageIndex == 5
+                ? Theme.of(context).colorScheme.primary
+                : null,
+          ),
+          tooltip: '功率扫描',
+        ),
+        IconButton(
+          onPressed: _testBusy ? null : _refreshPorts,
           icon: const Icon(Icons.refresh),
           tooltip: '刷新串口',
         ),
@@ -912,6 +1066,32 @@ class _HostPageState extends State<HostPage> {
         ? TraceView(
             controller: _trace,
             connected: _rxOpen && !_sweepRunning && !_askConfigBusy,
+          )
+        : _pageIndex == 5
+        ? PowerScanView(
+            controller: _power,
+            canStart: _canStartMeasurement,
+            connections: _buildTestConnections(),
+          )
+        : _pageIndex == 4
+        ? BerView(
+            controller: _ber,
+            connected: _txOpen && _rxOpen && _txPort != _rxPort,
+            canStart:
+                _txOpen &&
+                _rxOpen &&
+                _txPort != _rxPort &&
+                !_sweepRunning &&
+                !_trace.running &&
+                !_askConfigBusy &&
+                _txReply == null &&
+                _rxReply == null,
+            rxConnected:
+                _rxOpen &&
+                !_testBusy &&
+                !_ber.requiresReconnect &&
+                _rxReply == null,
+            connections: _buildTestConnections(),
           )
         : ListView(
             padding: const EdgeInsets.all(12),
@@ -931,6 +1111,60 @@ class _HostPageState extends State<HostPage> {
               ),
             ],
           ),
+  );
+
+  Widget _buildTestConnections() => LayoutBuilder(
+    builder: (context, constraints) {
+      final cardWidth = constraints.maxWidth < 720
+          ? constraints.maxWidth
+          : 350.0;
+      return Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: [
+          SizedBox(
+            width: cardWidth,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('TX 发送端'),
+                AbsorbPointer(
+                  absorbing: _testBusy,
+                  child: ConnectionCard(
+                    ports: _ports,
+                    selectedPort: _txPort,
+                    connected: _txOpen,
+                    status: _txStatus,
+                    onPortChanged: (v) => setState(() => _txPort = v),
+                    onToggle: () => _toggle(true),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            width: cardWidth,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('RX 接收端'),
+                AbsorbPointer(
+                  absorbing: _testBusy,
+                  child: ConnectionCard(
+                    ports: _ports,
+                    selectedPort: _rxPort,
+                    connected: _rxOpen,
+                    status: _rxStatus,
+                    onPortChanged: (v) => setState(() => _rxPort = v),
+                    onToggle: () => _toggle(false),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    },
   );
 
   Widget _buildCommunicationPage() => LayoutBuilder(
@@ -953,7 +1187,7 @@ class _HostPageState extends State<HostPage> {
       final rx = RxPanel(
         ports: _ports,
         selectedPort: _rxPort,
-        connected: _rxOpen,
+        connected: _rxOpen && !_testBusy && !_ber.requiresReconnect,
         status: _rxStatus,
         logs: _rxLogs,
         onPortChanged: (v) => setState(() => _rxPort = v),
@@ -961,6 +1195,7 @@ class _HostPageState extends State<HostPage> {
         onSend: (v) => _send(false, v),
         onClear: () => setState(_rxLogs.clear),
         deviceStatus: _rxDeviceStatus,
+        berRunning: _testBusy || _ber.requiresReconnect,
         records: _rxRecords,
         onClearRecords: () => setState(() {
           _rxRecords.clear();
@@ -1431,6 +1666,7 @@ class RxPanel extends StatefulWidget {
     required this.onSend,
     required this.onClear,
     required this.deviceStatus,
+    required this.berRunning,
     required this.records,
     required this.onClearRecords,
   });
@@ -1444,6 +1680,7 @@ class RxPanel extends StatefulWidget {
   final Future<void> Function(String) onSend;
   final VoidCallback onClear;
   final RxDeviceStatus deviceStatus;
+  final bool berRunning;
   final List<RxDataRecord> records;
   final VoidCallback onClearRecords;
 
@@ -1464,7 +1701,7 @@ class _RxPanelState extends State<RxPanel> {
   }
 
   Future<void> _readCycle() async {
-    if (_cycleBusy || !widget.connected) return;
+    if (_cycleBusy || !widget.connected || widget.berRunning) return;
     _cycleBusy = true;
     try {
       await widget.onSend('READ');
@@ -1474,7 +1711,7 @@ class _RxPanelState extends State<RxPanel> {
   }
 
   void _startAutoRead() {
-    if (!widget.connected) return;
+    if (!widget.connected || widget.berRunning) return;
     _autoReadTimer?.cancel();
     setState(() => _autoReading = true);
     _readCycle();
@@ -2289,24 +2526,31 @@ class ConnectionCard extends StatelessWidget {
   Widget build(BuildContext context) => Card(
     child: Padding(
       padding: const EdgeInsets.all(12),
-      child: Row(
-        children: [
-          Expanded(
-            child: DropdownButtonFormField<String>(
-              initialValue: ports.contains(selectedPort) ? selectedPort : null,
-              decoration: const InputDecoration(
-                labelText: '串口',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-              items: ports
-                  .map((p) => DropdownMenuItem(value: p, child: Text(p)))
-                  .toList(),
-              onChanged: connected ? null : onPortChanged,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final selector = DropdownButtonFormField<String>(
+            isExpanded: true,
+            initialValue: ports.contains(selectedPort) ? selectedPort : null,
+            decoration: const InputDecoration(
+              labelText: '串口',
+              border: OutlineInputBorder(),
+              isDense: true,
             ),
-          ),
-          const SizedBox(width: 8),
-          Column(
+            items: ports
+                .map(
+                  (p) => DropdownMenuItem(
+                    value: p,
+                    child: Text(
+                      p,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: connected ? null : onPortChanged,
+          );
+          final controls = Column(
             children: [
               Text(
                 '115200-8-N-1',
@@ -2317,17 +2561,41 @@ class ConnectionCard extends StatelessWidget {
                 child: Text(connected ? '关闭' : '打开'),
               ),
             ],
-          ),
-          const SizedBox(width: 8),
-          Chip(
+          );
+          final indicator = Chip(
             avatar: Icon(
               Icons.circle,
               size: 12,
               color: connected ? Colors.green : Colors.grey,
             ),
-            label: Text(status),
-          ),
-        ],
+            label: Text(status, maxLines: 1, overflow: TextOverflow.ellipsis),
+          );
+          if (constraints.maxWidth < 520) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: selector),
+                    const SizedBox(width: 12),
+                    controls,
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Align(alignment: Alignment.centerLeft, child: indicator),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: selector),
+              const SizedBox(width: 8),
+              controls,
+              const SizedBox(width: 8),
+              indicator,
+            ],
+          );
+        },
       ),
     ),
   );

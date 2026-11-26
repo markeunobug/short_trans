@@ -24,7 +24,7 @@ ARM 固件及上位机协议没有变化。
 2. 用 STM32 烧录工具将 receiver_arm.hex 写入接收端。
 3. Quartus Programmer 选择正确接收端的 USB-Blaster，使用 JTAG 模式，加载 receiver_fpga_epcq16a.jic，确认链中的 FPGA 和配置 Flash 与实物一致。
 4. 对配置 Flash 选择 Program/Configure 和 Verify 后开始。该操作会覆盖原 Flash 配置。
-5. 烧录校验成功后重新上电，连接上位机 RX 串口，STATUS 中应看到 ver=19。再运行一次手动解调观测采集。
+5. 烧录校验成功后重新上电，连接上位机 RX 串口，STATUS 中应看到 ver=20。再运行一次手动解调观测采集。
 
 仅下载 SOF 不会更新 Flash，断电后可能恢复旧版本。完整操作说明见 DEMOD_TRACE_QUICKSTART.md。
 

@@ -101,6 +101,11 @@ typedef struct
     uint32_t dac_hal_error;
     uint32_t dma_remaining;
     uint32_t dma_ccr;
+    uint32_t render_max_cycles;
+    uint32_t render_uart_budget_cycles;
+    uint32_t render_over_uart_budget_count;
+    uint32_t render_call_count;
+    uint8_t render_cycle_counter_available;
 } FskTx_Status;
 
 FskTx_Result FskTx_Init(DAC_HandleTypeDef *hdac, TIM_HandleTypeDef *htim);

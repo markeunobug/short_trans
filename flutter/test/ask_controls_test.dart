@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:short_trans_host/ask_controls.dart';
 
@@ -17,6 +18,8 @@ void main() {
     expect(askReplyMatches('MOD OOK', 'OK run=0 mode=5'), isFalse);
     expect(askReplyMatches('ASK STATUS', 'OK MOD OOK pending=0'), isFalse);
     expect(askReplyMatches('ASK STATUS', status()), isTrue);
+    expect(askReplyMatches('FSK STATUS', 'OK FSK STATUS margin=32'), isTrue);
+    expect(askReplyMatches('FSK THRESH 32 200', 'ERR busy'), isTrue);
     expect(askReplyMatches('ASK THRESH 400 600', 'ERR busy'), isTrue);
   });
 
@@ -43,6 +46,75 @@ void main() {
       }
     },
   );
+  test('FSK carrier settings validate raw Q4.4 and coarse offset units', () {
+    final value = FskCarrierConfig.parse('32', '200');
+    expect(value.command, 'FSK THRESH 32 200');
+    expect(value.multiplier, 2.0);
+    for (final values in [
+      ['0', '1'],
+      ['256', '1'],
+      ['16', '65536'],
+      ['1.0', '20'],
+      ['16', '-1'],
+    ]) {
+      expect(
+        () => FskCarrierConfig.parse(values[0], values[1]),
+        throwsFormatException,
+      );
+    }
+  });
+  test('FSK status and apply verify the active readback', () async {
+    const fskStatus = 'OK FSK STATUS margin=32 offset=200 pending=0 error=0 '
+        'busy=0 sweep=0 mode=1 generation=4';
+    final commands = <String>[];
+    final controller = AskController((tx, command) async {
+      expect(tx, isFalse);
+      commands.add(command);
+      return command == 'FSK STATUS'
+          ? fskStatus
+          : 'OK FSK THRESH margin=32 offset=200 pending=0';
+    });
+    final result = await controller.setFskCarrier(
+      FskCarrierConfig.parse('32', '200'),
+    );
+    expect(result, contains('已生效'));
+    expect(controller.fskStatus!.generation, 4);
+    expect(commands, ['FSK THRESH 32 200', 'FSK STATUS']);
+  });
+  testWidgets('FSK status remains visible when TX is disconnected and parent rebuilds', (tester) async {
+    late StateSetter rebuildParent;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: StatefulBuilder(builder: (context, setState) {
+          rebuildParent = setState;
+          return AskControls(
+            txConnected: false,
+            rxConnected: true,
+            sweepRunning: false,
+            command: (tx, command) async =>
+                'OK FSK STATUS margin=32 offset=200 pending=0 error=0 '
+                'busy=0 sweep=0 mode=1 generation=4',
+            onBusy: (_) => rebuildParent(() {}),
+          );
+        }),
+      ),
+    ));
+
+    await tester.tap(find.text('读取 FSK 参数'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('FSK：2.00x'), findsOneWidget);
+  });
+  test('pending FSK carrier settings are not reported as active', () async {
+    final controller = AskController((tx, command) async => command == 'FSK STATUS'
+        ? 'OK FSK STATUS margin=32 offset=200 pending=1 error=0 '
+              'busy=1 sweep=0 mode=1 generation=4'
+        : 'OK FSK THRESH margin=48 offset=300 pending=1');
+    final result = await controller.setFskCarrier(
+      FskCarrierConfig.parse('48', '300'),
+    );
+    expect(result, contains('等待接收空闲'));
+    expect(controller.fskStatus!.marginQ4_4, 32);
+  });
   test('status parsing validates actual mode, flags and full-width energy', () {
     final parsed = AskStatus.parse(status(pending: 1));
     expect(parsed.energy, 0xffffffff);

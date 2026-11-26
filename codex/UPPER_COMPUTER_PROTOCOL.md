@@ -169,11 +169,13 @@ elapsed10=<10ms单位经过时间>
 | `HELP` | 显示 RX 命令帮助 |
 | `STATUS` | 查询 FPGA、帧和时间状态 |
 | `READ` | 读取当前队首应用 Payload 及时间信息 |
+| `FSK STATUS` | 读取已生效的 FSK 噪声倍率和偏置 | `OK FSK STATUS margin=32 offset=200 pending=0 ...` |
+| `FSK THRESH <margin_q4_4> <offset_units>` | 提交 FSK 载波门限参数；倍率范围 1..255，偏置范围 0..65535 | `OK FSK THRESH margin=... offset=... pending=0/1` |
 
 ### RX STATUS 示例字段
 
 ```text
-fpga=1 ver=16 result=0 len=4 seq=7 type=0
+fpga=1 ver=20 result=0 len=4 seq=7 type=0
 time_valid=1 base_s=... elapsed10ms=123 timestamp_ms=...
 uart_err=0 overflow=0
 ```
@@ -181,6 +183,11 @@ uart_err=0 overflow=0
 `timestamp_ms` 只有在 `time_valid=1` 时才可作为绝对时间使用。未收到 TIME_BASE 的 DATA 仍可读取，但 `time_valid=0`。
 
 ### RX READ 语义
+
+误码率诊断扩展新增独立 `BER START|STOP|CLEAR|STATUS|HEALTH|READ|POP <capture_id>`
+命令，详见 `codex/BER_PROTOCOL.md`。诊断记录可保留 CRC 坏帧，但不进入正常应用
+FIFO。原有 `READ` 响应格式不变；当前 STM32 实现返回**最新缓存帧**，重复查询不
+等于新交付。BER 上位机以批次号和 32 位包号去重，并分别记录正常交付与诊断捕获。
 
 ```text
 OK DATA <payload_hex> time_valid=<0|1> timestamp_ms=<uint64>
@@ -204,6 +211,16 @@ SPI：Mode 0、8 bit、MSB first、约 1 MHz、NSS 低有效。命令字节 bit7
 
 对 `TIME_BASE`，`0x17..0x1A` 是 `base_time_s`。  
 对 `DATA`，FPGA 将 24 bit `elapsed_10ms` 零扩展到 32 bit 放入上述寄存器。
+
+### FSK 载波门限调节
+
+FSK THRESH 的 margin_q4_4 是 Q4.4 倍率原始值（32 表示 2.0 倍）。offset_units 是粗量程偏置，每单位等于 256 个 FPGA 能量计数。载波阈值按以下公式计算，超出 33 位范围时饱和：
+
+```text
+threshold = noise_energy * margin_q4_4 / 16 + offset_units * 256
+```
+
+配置先写入影子寄存器，接收空闲后才一起应用；`pending=1` 时应停止发射并稍后执行 `FSK STATUS` 读回。
 
 ### 常用帧寄存器
 

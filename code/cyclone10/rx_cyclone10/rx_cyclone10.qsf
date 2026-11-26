@@ -235,7 +235,6 @@ set_instance_assignment -name CONNECT_TO_SLD_NODE_ENTITY_PORT acq_data_in[50] -t
 set_instance_assignment -name POST_FIT_CONNECT_TO_SLD_NODE_ENTITY_PORT crc[6] -to auto_signaltap_0|gnd -section_id auto_signaltap_0
 set_instance_assignment -name CONNECT_TO_SLD_NODE_ENTITY_PORT acq_trigger_in[0] -to signaltap_symbol_valid -section_id auto_signaltap_0
 set_instance_assignment -name CONNECT_TO_SLD_NODE_ENTITY_PORT acq_data_in[51] -to signaltap_symbol_valid -section_id auto_signaltap_0
-set_instance_assignment -name CONNECT_PIN_TO_SLD_NODE_ENTITY_PORT storage_enable -to signaltap_symbol_valid -section_id auto_signaltap_0
 set_instance_assignment -name POST_FIT_CONNECT_TO_SLD_NODE_ENTITY_PORT crc[1] -to auto_signaltap_0|gnd -section_id auto_signaltap_0
 set_instance_assignment -name POST_FIT_CONNECT_TO_SLD_NODE_ENTITY_PORT crc[3] -to auto_signaltap_0|gnd -section_id auto_signaltap_0
 set_instance_assignment -name POST_FIT_CONNECT_TO_SLD_NODE_ENTITY_PORT crc[4] -to auto_signaltap_0|gnd -section_id auto_signaltap_0
@@ -250,6 +249,13 @@ set_global_assignment -name VERILOG_FILE rtl/demod/ook_iq_correlator.v
 set_global_assignment -name VERILOG_FILE rtl/sync/ook_symbol_sync.v
 
 
+
+set_instance_assignment -name CONNECT_TO_SLD_NODE_ENTITY_PORT storage_enable -to signaltap_symbol_valid -section_id auto_signaltap_0
+# Passive BER diagnostic peripheral; disabled after reset.
+set_global_assignment -name VERILOG_FILE rtl/debug/ber_capture.v
+
+# Passive per-transmit-window stage evidence (BER schema 2)
+set_global_assignment -name VERILOG_FILE rtl/debug/ber_observer.v
 
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
 set_global_assignment -name SLD_FILE db/FSK_3_SYMBOLS_auto_stripped.stp

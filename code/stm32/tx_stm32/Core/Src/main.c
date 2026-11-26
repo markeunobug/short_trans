@@ -24,6 +24,7 @@
 #include "fsk_tx.h"
 #include "rs485_half_duplex.h"
 
+#include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
 
@@ -36,6 +37,13 @@
 /* USER CODE BEGIN PD */
 #define FSK_UART_RX_RING_SIZE 256U
 #define FSK_UART_RX_RING_MASK (FSK_UART_RX_RING_SIZE - 1U)
+#define FSK_UART_DIAG_BAD_BYTES 32U
+#define FSK_UART_LINE_MAX_LENGTH UINT16_MAX
+#if defined(__OPTIMIZE__)
+#define FSK_UART_DIAG_OPTIMIZED 1U
+#else
+#define FSK_UART_DIAG_OPTIMIZED 0U
+#endif
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -62,6 +70,18 @@ static volatile uint16_t fsk_uart_rx_head;
 static volatile uint16_t fsk_uart_rx_tail;
 static volatile uint32_t fsk_uart_error_count;
 static volatile uint32_t fsk_uart_overflow_count;
+static volatile uint32_t fsk_uart_ore_count, fsk_uart_fe_count;
+static volatile uint32_t fsk_uart_ne_count, fsk_uart_pe_count;
+static volatile uint32_t fsk_uart_rearm_fail_count, fsk_uart_tx_error_count;
+static volatile uint32_t fsk_uart_line_overflow_count;
+static volatile uint32_t fsk_uart_command_error_count;
+static uint8_t fsk_uart_line_overflowed;
+static uint8_t fsk_uart_last_bad[FSK_UART_DIAG_BAD_BYTES];
+static uint16_t fsk_uart_last_bad_length;
+static uint8_t fsk_uart_last_bad_count;
+static uint16_t fsk_uart_line_total_length;
+/* Separate from the unchanged normal-command response buffer. */
+static char fsk_uart_diag_response[512];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -77,24 +97,136 @@ static void MX_TIM4_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void FskUart_RecordHardwareErrors(uint32_t error)
+{
+  if ((error & HAL_UART_ERROR_ORE) != 0U) ++fsk_uart_ore_count;
+  if ((error & HAL_UART_ERROR_FE) != 0U) ++fsk_uart_fe_count;
+  if ((error & HAL_UART_ERROR_NE) != 0U) ++fsk_uart_ne_count;
+  if ((error & HAL_UART_ERROR_PE) != 0U) ++fsk_uart_pe_count;
+}
+
+static void FskUart_RememberBadLine(const char *line,
+                                    uint16_t captured_length,
+                                    uint16_t total_length)
+{
+  uint16_t count = (captured_length > FSK_UART_DIAG_BAD_BYTES) ?
+                   FSK_UART_DIAG_BAD_BYTES : captured_length;
+  memset(fsk_uart_last_bad, 0, sizeof(fsk_uart_last_bad));
+  memcpy(fsk_uart_last_bad, line, count);
+  fsk_uart_last_bad_count = (uint8_t)count;
+  fsk_uart_last_bad_length = total_length;
+}
+
+static void FskUart_Transmit(const char *text)
+{
+  if (rs485_half_duplex_transmit(&rs485a, (const uint8_t *)text,
+                                (uint16_t)strlen(text), 100U) != HAL_OK)
+  {
+    ++fsk_uart_tx_error_count;
+  }
+}
+
+static void FskUart_SendDiagnostics(void)
+{
+  static const char hex[] = "0123456789ABCDEF";
+  FskTx_Status status;
+  uint32_t saved_irq, rxerr, rxovf, ore, fe, ne, pe, rearm;
+  int written;
+  size_t used;
+  uint16_t index, count;
+
+  /* Snapshot interrupt-owned counters; formatting never masks interrupts. */
+  saved_irq = __get_PRIMASK();
+  __disable_irq();
+  rxerr = fsk_uart_error_count; rxovf = fsk_uart_overflow_count;
+  ore = fsk_uart_ore_count; fe = fsk_uart_fe_count;
+  ne = fsk_uart_ne_count; pe = fsk_uart_pe_count;
+  rearm = fsk_uart_rearm_fail_count;
+  if (saved_irq == 0U) __enable_irq();
+  FskTx_GetStatus(&status);
+  written = snprintf(fsk_uart_diag_response, sizeof(fsk_uart_diag_response),
+      "OK UART DIAG rxerr=%lu rxovf=%lu lineovf=%lu cmderr=%lu "
+      "ore=%lu fe=%lu ne=%lu pe=%lu rearmfail=%lu txerr=%lu "
+      "badlen=%u badcap=%u badhex=",
+      (unsigned long)rxerr, (unsigned long)rxovf,
+      (unsigned long)fsk_uart_line_overflow_count,
+      (unsigned long)fsk_uart_command_error_count,
+      (unsigned long)ore, (unsigned long)fe, (unsigned long)ne,
+      (unsigned long)pe, (unsigned long)rearm,
+      (unsigned long)fsk_uart_tx_error_count,
+      (unsigned)fsk_uart_last_bad_length, (unsigned)fsk_uart_last_bad_count);
+  if ((written < 0) || ((size_t)written >= sizeof(fsk_uart_diag_response)))
+  {
+    (void)strcpy(fsk_uart_diag_response, "ERR UART DIAG BUFFER\r\n");
+  }
+  else
+  {
+    used = (size_t)written;
+    count = fsk_uart_last_bad_count;
+    for (index = 0U; index < count && (used + 2U) < sizeof(fsk_uart_diag_response); ++index)
+    {
+      fsk_uart_diag_response[used++] = hex[fsk_uart_last_bad[index] >> 4U];
+      fsk_uart_diag_response[used++] = hex[fsk_uart_last_bad[index] & 0x0FU];
+    }
+    written = snprintf(&fsk_uart_diag_response[used], sizeof(fsk_uart_diag_response) - used,
+        " rendermax=%lu uartbudget=%lu renderlate=%lu renders=%lu dwt=%u hclk=%lu schema=1 opt=%u\r\n",
+        (unsigned long)status.render_max_cycles,
+        (unsigned long)status.render_uart_budget_cycles,
+        (unsigned long)status.render_over_uart_budget_count,
+        (unsigned long)status.render_call_count,
+        (unsigned)status.render_cycle_counter_available,
+        (unsigned long)HAL_RCC_GetHCLKFreq(), (unsigned)FSK_UART_DIAG_OPTIMIZED);
+    if ((written < 0) || ((size_t)written >= sizeof(fsk_uart_diag_response) - used))
+      (void)strcpy(fsk_uart_diag_response, "ERR UART DIAG BUFFER\r\n");
+  }
+  FskUart_Transmit(fsk_uart_diag_response);
+}
+
 static void FskUart_ProcessByte(uint8_t byte)
 {
   if ((byte == '\r') || (byte == '\n'))
   {
     if (fsk_uart_line_length == 0U)
     {
+      if (fsk_uart_line_overflowed != 0U)
+      {
+        ++fsk_uart_line_overflow_count;
+        FskUart_RememberBadLine(fsk_uart_line, fsk_uart_line_length,
+                                fsk_uart_line_total_length);
+        fsk_uart_line_overflowed = 0U;
+        fsk_uart_line_total_length = 0U;
+      }
       return;
     }
 
     HAL_Delay(1U);
     fsk_uart_line[fsk_uart_line_length] = '\0';
-    (void)FskTx_HandleUartCommand(fsk_uart_line,
-                                  fsk_uart_response,
-                                  sizeof(fsk_uart_response));
-    (void)rs485_half_duplex_transmit(
-        &rs485a, (const uint8_t *)fsk_uart_response,
-        (uint16_t)strlen(fsk_uart_response), 100U);
+    if (fsk_uart_line_overflowed != 0U)
+    {
+      ++fsk_uart_line_overflow_count;
+      FskUart_RememberBadLine(fsk_uart_line, fsk_uart_line_length,
+                              fsk_uart_line_total_length);
+    }
+    if ((fsk_uart_line_overflowed == 0U) &&
+        (strcmp(fsk_uart_line, "UART DIAG") == 0))
+    {
+      FskUart_SendDiagnostics();
+    }
+    else
+    {
+      FskTx_Result command_result = FskTx_HandleUartCommand(
+          fsk_uart_line, fsk_uart_response, sizeof(fsk_uart_response));
+      if (command_result == FSK_TX_ERROR_COMMAND)
+      {
+        ++fsk_uart_command_error_count;
+        FskUart_RememberBadLine(fsk_uart_line, fsk_uart_line_length,
+                                fsk_uart_line_total_length);
+      }
+      FskUart_Transmit(fsk_uart_response);
+    }
+    fsk_uart_line_overflowed = 0U;
     fsk_uart_line_length = 0U;
+    fsk_uart_line_total_length = 0U;
     return;
   }
 
@@ -111,6 +243,18 @@ static void FskUart_ProcessByte(uint8_t byte)
       (fsk_uart_line_length < (sizeof(fsk_uart_line) - 1U)))
   {
     fsk_uart_line[fsk_uart_line_length++] = (char)byte;
+    if (fsk_uart_line_total_length < FSK_UART_LINE_MAX_LENGTH)
+    {
+      ++fsk_uart_line_total_length;
+    }
+  }
+  else if ((byte >= 0x20U) && (byte <= 0x7EU))
+  {
+    fsk_uart_line_overflowed = 1U;
+    if (fsk_uart_line_total_length < FSK_UART_LINE_MAX_LENGTH)
+    {
+      ++fsk_uart_line_total_length;
+    }
   }
 }
 
@@ -434,8 +578,18 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart == &huart1)
   {
+    /* HAL's one-byte RxISR can call us with an error already set. Rearming
+       below clears ErrorCode, before HAL_UART_IRQHandler checks it again;
+       that path does not necessarily reach HAL_UART_ErrorCallback. */
+    uint32_t receive_error = huart->ErrorCode;
     uint16_t next = (uint16_t)((fsk_uart_rx_head + 1U) &
                                FSK_UART_RX_RING_MASK);
+
+    if (receive_error != HAL_UART_ERROR_NONE)
+    {
+      FskUart_RecordHardwareErrors(receive_error);
+      ++fsk_uart_error_count;
+    }
 
     if (next != fsk_uart_rx_tail)
     {
@@ -450,6 +604,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     if (HAL_UART_Receive_IT(&huart1, &fsk_uart_irq_byte, 1U) != HAL_OK)
     {
       ++fsk_uart_error_count;
+      ++fsk_uart_rearm_fail_count;
     }
   }
 }
@@ -458,9 +613,14 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   if (huart == &huart1)
   {
+    uint32_t error = huart->ErrorCode;
+    FskUart_RecordHardwareErrors(error);
     ++fsk_uart_error_count;
     __HAL_UART_CLEAR_OREFLAG(&huart1);
-    (void)HAL_UART_Receive_IT(&huart1, &fsk_uart_irq_byte, 1U);
+    if (HAL_UART_Receive_IT(&huart1, &fsk_uart_irq_byte, 1U) != HAL_OK)
+    {
+      ++fsk_uart_rearm_fail_count;
+    }
   }
 }
 

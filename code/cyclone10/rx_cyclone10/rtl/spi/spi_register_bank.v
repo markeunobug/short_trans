@@ -86,7 +86,7 @@ module spi_register_bank (
 );
 
     localparam [7:0] DEVICE_ID_VALUE  = 8'hA7;
-    localparam [7:0] FW_VERSION_VALUE = 8'h13;
+    localparam [7:0] FW_VERSION_VALUE = 8'h14;
 
     localparam [6:0] ADDR_DEVICE_ID         = 7'h00;
     localparam [6:0] ADDR_FW_VERSION        = 7'h01;
@@ -180,6 +180,12 @@ module spi_register_bank (
     localparam [6:0] ADDR_RX_MODE_ACTIVE     = 7'h7C;
     localparam [6:0] ADDR_ASK_FLAGS          = 7'h7D;
     localparam [6:0] ADDR_CONFIG_GENERATION  = 7'h7E;
+    localparam [6:0] ADDR_FSK_MARGIN_SHADOW  = 7'h43;
+    localparam [6:0] ADDR_FSK_OFFSET_L_SHADOW = 7'h44;
+    localparam [6:0] ADDR_FSK_OFFSET_H_SHADOW = 7'h45;
+    localparam [6:0] ADDR_FSK_CONFIG_CONTROL = 7'h46;
+    localparam [6:0] ADDR_FSK_CONFIG_STATUS  = 7'h47;
+    localparam [6:0] ADDR_FSK_CONFIG_GENERATION = 7'h48;
 
     wire [7:0] fifo_head_version_type;
     wire [7:0] fifo_head_sequence;
@@ -214,6 +220,13 @@ module spi_register_bank (
     reg [1:0]  pending_mode;
     reg [31:0] pending_low, pending_high;
     reg [7:0]  config_generation;
+    reg [7:0]  fsk_margin_shadow;
+    reg [15:0] fsk_offset_shadow;
+    reg [7:0]  fsk_pending_margin;
+    reg [15:0] fsk_pending_offset;
+    reg        fsk_config_pending;
+    reg        fsk_config_error;
+    reg [7:0]  fsk_config_generation;
     reg [31:0] energy_latch;
 
     wire snapshot_data_read;
@@ -393,6 +406,11 @@ module spi_register_bank (
             ADDR_RX_MODE_ACTIVE:    bus_read_data = {6'd0, rx_mode_active};
             ADDR_ASK_FLAGS:         bus_read_data = {5'd0, ook_energy_ready, ook_symbol_locked, ook_hard_bit};
             ADDR_CONFIG_GENERATION: bus_read_data = config_generation;
+            ADDR_FSK_MARGIN_SHADOW: bus_read_data = fsk_margin_shadow;
+            ADDR_FSK_OFFSET_L_SHADOW: bus_read_data = fsk_offset_shadow[7:0];
+            ADDR_FSK_OFFSET_H_SHADOW: bus_read_data = fsk_offset_shadow[15:8];
+            ADDR_FSK_CONFIG_STATUS: bus_read_data = {4'd0, sweep_active, rx_busy, fsk_config_error, fsk_config_pending};
+            ADDR_FSK_CONFIG_GENERATION: bus_read_data = fsk_config_generation;
             default: bus_read_data = 8'd0;
         endcase
     end
@@ -436,6 +454,13 @@ module spi_register_bank (
             pending_low <= 32'd400;
             pending_high <= 32'd600;
             config_generation <= 8'd0;
+            fsk_margin_shadow <= 8'h20;
+            fsk_offset_shadow <= 16'd200;
+            fsk_pending_margin <= 8'h20;
+            fsk_pending_offset <= 16'd200;
+            fsk_config_pending <= 1'b0;
+            fsk_config_error <= 1'b0;
+            fsk_config_generation <= 8'd0;
             energy_latch <= 32'd0;
             config_apply_pulse <= 1'b0;
         end else begin
@@ -460,6 +485,14 @@ module spi_register_bank (
                 config_apply_pulse <= 1'b1;
             end
 
+            if (fsk_config_pending && !config_pending &&
+                (rx_mode_active == 2'd1) && !rx_busy && !sweep_active) begin
+                energy_margin <= fsk_pending_margin;
+                noise_offset <= fsk_pending_offset;
+                fsk_config_pending <= 1'b0;
+                fsk_config_generation <= fsk_config_generation + 1'b1;
+                config_apply_pulse <= 1'b1;
+            end
             if (spi_protocol_error)
                 spi_error_sticky <= 1'b1;
             if (protocol_error)
@@ -572,7 +605,7 @@ module spi_register_bank (
                     ADDR_ASK_CONFIG_CONTROL: begin
                         if (bus_write_data[1]) config_error_sticky <= 1'b0;
                         if (bus_write_data[0]) begin
-                            if (config_pending) config_error_sticky <= 1'b1;
+                            if (config_pending || fsk_config_pending) config_error_sticky <= 1'b1;
                             else if (((rx_mode_shadow == 8'd1) || (rx_mode_shadow == 8'd2)) &&
                                      (ask_low_shadow < ask_high_shadow)) begin
                                 pending_mode <= rx_mode_shadow[1:0];
@@ -580,6 +613,26 @@ module spi_register_bank (
                                 pending_high <= ask_high_shadow;
                                 config_pending <= 1'b1;
                             end else config_error_sticky <= 1'b1;
+                        end
+                    end
+                    ADDR_FSK_MARGIN_SHADOW:
+                        fsk_margin_shadow <= bus_write_data;
+                    ADDR_FSK_OFFSET_L_SHADOW:
+                        fsk_offset_shadow[7:0] <= bus_write_data;
+                    ADDR_FSK_OFFSET_H_SHADOW:
+                        fsk_offset_shadow[15:8] <= bus_write_data;
+                    ADDR_FSK_CONFIG_CONTROL: begin
+                        if (bus_write_data[1]) fsk_config_error <= 1'b0;
+                        if (bus_write_data[0]) begin
+                            if (fsk_config_pending || config_pending ||
+                                (rx_mode_active != 2'd1) ||
+                                (fsk_margin_shadow == 8'd0)) begin
+                                fsk_config_error <= 1'b1;
+                            end else begin
+                                fsk_pending_margin <= fsk_margin_shadow;
+                                fsk_pending_offset <= fsk_offset_shadow;
+                                fsk_config_pending <= 1'b1;
+                            end
                         end
                     end
                     default: begin

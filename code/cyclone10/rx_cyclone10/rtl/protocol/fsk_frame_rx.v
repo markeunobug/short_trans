@@ -16,6 +16,8 @@ module fsk_frame_rx #(
     input  wire        bit_value,
     input  wire        lock_lost,
 
+    output wire [3:0]  debug_state,
+    output wire [6:0]  debug_payload_bytes,
     output wire        busy,
     output reg         sync_found,
     output reg         frame_valid,
@@ -69,6 +71,8 @@ module fsk_frame_rx #(
     reg [15:0] next_sync;
     reg [7:0] next_byte;
 
+    assign debug_state = state;
+    assign debug_payload_bytes = payload_byte_index;
     assign busy       = (state != ST_SEARCH_SYNC);
     assign good_frame = frame_valid;
 

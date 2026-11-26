@@ -6,12 +6,12 @@ not modified. No hardware was programmed or measured during implementation.
 
 ## Operator workflow
 
-1. Program the matching receiver FPGA (FW_VERSION 0x13) and RX ARM builds.
+1. Program the matching receiver FPGA (FW_VERSION 0x14) and RX ARM builds.
    The TX firmware does not need a trace-specific update. Preserve a known-good
    firmware set before bench programming. The supplied SOF is a configuration
    image, not a persistent-flash JIC image.
 2. Run short_trans_host.exe with its adjacent DLLs and data directory. Connect
-   RX at the existing 115200 / 8N1 settings. STATUS should show ver=19.
+   RX at the existing 115200 / 8N1 settings. STATUS should show ver=20.
 3. Select the desired modulation in the existing modulation/threshold page,
    then open the monitor-heart toolbar button (demodulation observation).
 4. For an initial test select manual trigger and 128 ms post-trigger, start
@@ -101,7 +101,7 @@ All multi-byte values below are little-endian, including trace samples.
 The offset increments after each completed byte. Reading before ready or past
 the end returns zero. Frozen RAM/header remain unchanged until a new ARM/reset.
 RAM reads are synchronous and settle before the next byte at the supported
-approximately 1 MHz SPI SCK. ARM verifies firmware exactly 0x13 and signature
+approximately 1 MHz SPI SCK. ARM verifies firmware 0x13 or 0x14 and signature
 0xD1 before issuing commands; unknown layouts are rejected.
 
 Trigger mask bits: 0 manual, 1 carrier rising, 2 lock rising, 3 lock-lost pulse,
@@ -114,12 +114,12 @@ Combinations are supported by the protocol; the UI chooses one trigger at a time
 | --- | --- | --- |
 | 0 | 4 | ASCII DTR1 |
 | 4 | 1 | Layout version 1 |
-| 5 | 1 | FPGA firmware 0x13 |
+| 5 | 1 | FPGA firmware 0x14 |
 | 6 | 1 | Applied mode: 1 FSK / 2 OOK |
 | 7 | 1 | Applied sample right shift |
 | 8 | 1 | Applied FSK noise multiplier, unsigned Q4.4 |
 | 9 | 1 | Applied FSK confidence threshold |
-| 10 | 2 | Applied FSK noise offset |
+| 10 | 2 | Applied FSK coarse offset units; multiply by 256 for energy counts |
 | 12 | 4 | Applied OOK LOW threshold |
 | 16 | 4 | Applied OOK HIGH threshold |
 | 20 | 4 | Nominal sample rate, 48000 |
@@ -137,7 +137,7 @@ Combinations are supported by the protocol; the UI chooses one trigger at a time
 | 46 | 2 | Correlator window samples, FSK=480 / OOK=80 |
 | 48 | 16 | Reserved zero |
 
-Mode, shift, margin, confidence, offset and OOK thresholds are captured on ARM.
+Mode, shift, margin, confidence, coarse offset units and OOK thresholds are captured on ARM. Offset energy-count contribution is offset_units * 256.
 A change aborts capture rather than mixing configurations. A configuration
 commit pulse aborts capture even when the committed values are unchanged.
 

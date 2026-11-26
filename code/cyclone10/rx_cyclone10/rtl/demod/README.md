@@ -48,9 +48,9 @@ which freezes idle noise learning.
 
 The confidence threshold is checked without division:
 
-```text
+
 abs(E1-E0) * 256 >= (E1+E0) * confidence_threshold
-```
+
 
 `confidence_threshold = 8'd128` therefore means 0.5.
 
@@ -79,8 +79,11 @@ real top-level design.
 `noise_multiplier_q4_4` is unsigned Q4.4 (`8'h40` is 4.0x). The threshold is:
 
 ```text
-carrier_threshold = saturate(noise_energy * multiplier / 16 + noise_offset)
+carrier_threshold = saturate(noise_energy * multiplier / 16 + noise_offset * 256)
 ```
+
+`noise_offset` is a coarse-range setting in energy counts: each unit adds 256
+counts. The reset value 200 adds 51,200 counts.
 
 When idle metrics lie at or below that threshold, `noise_energy` follows
 them with an EWMA alpha of 1/32. A threshold crossing freezes learning

@@ -353,7 +353,7 @@ module rx_cyclone10 (
         .clk(clk_sys), .reset_n(rst_fsk_n), .sample_valid(demod_sample_valid),
         .sample_data(demod_sample_data), .noise_track_enable(!fsk_carrier_active),
         .carrier_active(fsk_carrier_active), .noise_multiplier_q4_4(energy_margin),
-        .noise_offset({17'd0, noise_offset}), .confidence_threshold(confidence_threshold),
+        .noise_offset(noise_offset), .confidence_threshold(confidence_threshold),
         .metric_valid(fsk_metric_valid), .hard_bit(fsk_hard_bit), .soft_metric(soft_metric),
         .total_energy(total_energy), .confidence(confidence), .confidence_ok(confidence_ok),
         .energy_f0(energy_f0), .energy_f1(energy_f1), .noise_energy(noise_energy),
@@ -361,13 +361,20 @@ module rx_cyclone10 (
         .noise_ready(noise_ready), .noise_update(noise_update)
     );
 
+    wire [1:0] observer_symbol_state;
+    wire [3:0] observer_parser_state;
+    wire [6:0] observer_payload_bytes;
     wire fsk_symbol_locked, fsk_preamble_detected, fsk_symbol_lock_lost;
     wire fsk_symbol_search_timeout, fsk_bit_valid, fsk_bit_value;
     wire [32:0] fsk_symbol_energy;
     wire [7:0] fsk_symbol_confidence;
     wire [3:0] fsk_selected_phase;
     wire signed [1:0] fsk_timing_adjust;
-    fsk_symbol_sync u_symbol_sync (
+    // The default 100-symbol guard fits TIME_BASE (16+80) but truncates DATA.
+    // V2 DATA64 needs 16 sync + 8*(4 header+3 time+64 payload+2 CRC)=600.
+    // Keep a bounded 40-symbol margin; carrier-loss release is unchanged.
+    fsk_symbol_sync #(.LOCK_TIMEOUT_SYMBOLS(640)) u_symbol_sync (
+        .debug_state(observer_symbol_state),
         .clk(clk_sys), .reset_n(rst_fsk_n), .metric_valid(fsk_metric_valid),
         .hard_bit(fsk_hard_bit), .total_energy(total_energy), .confidence(confidence),
         .carrier_present(energy_above_threshold), .preamble_confidence_threshold(confidence_threshold),
@@ -508,6 +515,7 @@ module rx_cyclone10 (
     wire parser_lock_lost = symbol_lock_lost || config_apply_pulse ||
                             sweep_start_pulse || sweep_abort_pulse;
     fsk_frame_rx u_frame_rx (
+        .debug_state(observer_parser_state), .debug_payload_bytes(observer_payload_bytes),
         .clk(clk_sys),
         .rst_n(rst_chain_n),
         .bit_valid(bit_valid),
@@ -574,7 +582,10 @@ module rx_cyclone10 (
     wire [7:0] register_read_data, trace_read_data;
     wire trace_selected = ((spi_bus_address >= 7'h32) && (spi_bus_address <= 7'h3f)) ||
                           (spi_bus_address == 7'h42);
-    assign spi_bus_read_data = trace_selected ? trace_read_data : register_read_data;
+    wire [7:0] ber_read_data;
+    wire ber_selected = (spi_bus_address >= 7'h49) && (spi_bus_address <= 7'h4f);
+    assign spi_bus_read_data = ber_selected ? ber_read_data :
+                              trace_selected ? trace_read_data : register_read_data;
     wire spi_bus_write_strobe;
     wire [7:0] spi_bus_write_data;
     wire spi_protocol_error;
@@ -583,7 +594,9 @@ module rx_cyclone10 (
     wire [32:0] ook_midpoint = ({1'b0, ask_low_active} + {1'b0, ask_high_active}) >> 1;
     wire signed [32:0] trace_soft = (rx_mode_active == 2) ?
         $signed({1'b0, ook_energy}) - $signed(ook_midpoint) : soft_metric;
-    wire trace_carrier = carrier_active;
+    // Keep the trace carrier/tone state distinct from symbol lock.
+    wire trace_carrier = (rx_mode_active == 2'd2) ?
+        (ook_energy_ready && ook_hard_bit) : fsk_carrier_active;
     wire [31:0] trace_state = {13'd0, ((rx_mode_active == 1) && confidence_ok), 1'b0,
         ((rx_mode_active == 2) ? (ook_energy >= ask_high_active) : energy_above_threshold),
         ((rx_mode_active == 2) ? ook_energy_ready : noise_ready), 10'd0,
@@ -606,6 +619,39 @@ module rx_cyclone10 (
         .bus_write_strobe(spi_bus_write_strobe), .bus_write_data(spi_bus_write_data),
         .bus_read_data(trace_read_data)
     );
+    // Observation only: no BER output feeds back into the production chain.
+    wire [7:0] observer_read_data, observer_read_offset;
+    ber_observer u_ber_observer (
+        .clk(clk_sys), .reset_n(rst_sys_n),
+        .sample_valid(demod_sample_valid), .metric_valid(fsk_metric_valid),
+        .bit_valid(fsk_bit_valid),
+        .chain_available(rst_chain_n && rx_mode_active == 2'd1 && !sweep_active && !config_apply_pulse),
+        .carrier(fsk_carrier_active), .locked(fsk_symbol_locked),
+        .parser_busy(frame_parser_busy), .preamble(fsk_preamble_detected),
+        .parser_state(observer_parser_state), .symbol_state(observer_symbol_state),
+        .payload_bytes(observer_payload_bytes), .hard_bit(fsk_hard_bit),
+        .sync_found(sync_found), .header_error(header_error), .length_error(length_error),
+        .crc_error(crc_error), .good_frame(good_frame), .lock_lost(parser_lock_lost),
+        .frame_timeout(frame_timeout_error), .search_timeout(fsk_symbol_search_timeout),
+        .i2s_error(i2s_error_sync_ff2), .cdc_error(sample_overflow_sync_ff2),
+        .clipped(adc_near_full_scale || sample_clipped_positive || sample_clipped_negative),
+        .energy_above(energy_above_threshold), .energy(total_energy), .threshold(carrier_threshold),
+        .confidence(confidence), .phase(fsk_selected_phase), .timing_adjust(fsk_timing_adjust),
+        .bus_address(spi_bus_address), .bus_read_strobe(spi_bus_read_strobe),
+        .bus_write_strobe(spi_bus_write_strobe), .bus_write_data(spi_bus_write_data),
+        .read_offset(observer_read_offset), .bus_read_data(observer_read_data)
+    );
+    ber_capture u_ber_capture (
+        .clk(clk_sys), .reset_n(rst_sys_n), .sample_valid(sample_fifo_rd_valid),
+        .observer_read_data(observer_read_data), .observer_read_offset(observer_read_offset),
+        .chain_available(rst_chain_n && rx_mode_active == 2'd1 && !sweep_active &&
+                         !config_apply_pulse),
+        .sync_found(sync_found), .bit_valid(bit_valid), .bit_value(bit_value),
+        .lock_lost(parser_lock_lost), .bus_address(spi_bus_address),
+        .bus_read_strobe(spi_bus_read_strobe), .bus_write_strobe(spi_bus_write_strobe),
+        .bus_write_data(spi_bus_write_data), .bus_read_data(ber_read_data)
+    );
+
     spi1_slave u_spi1 (
         .clk_sys(clk_sys),
         .rst_sys_n(rst_sys_n),
@@ -650,7 +696,8 @@ module rx_cyclone10 (
         .last_energy_f0(last_energy_f0),
         .last_energy_f1(last_energy_f1),
         .last_confidence(last_confidence),
-        .rx_busy(frame_parser_busy || symbol_locked || ((rx_mode_active == 2'd2) && ook_candidate_active)),
+        .rx_busy(frame_parser_busy || fsk_carrier_active ||
+                 ((rx_mode_active == 2'd2) && ook_candidate_active)),
         .ook_energy(ook_energy),
         .ook_hard_bit(ook_hard_bit),
         .ook_symbol_locked(ook_symbol_locked),

@@ -22,7 +22,7 @@ static void fsk(const uint16_t *x, unsigned cycles) {
 }
 static void complete_line(const char *line) { size_t length=strlen(line); assert(length >= 2U); assert(line[length-2U]=='\r'); assert(line[length-1U]=='\n'); }
 int main(void) {
- DMA_Channel_TypeDef channel={0}; DMA_HandleTypeDef dma={.Instance=&channel}; DAC_HandleTypeDef dac={.Instance=DAC1,.DMA_Handle1=&dma}; TIM_HandleTypeDef tim={.Instance=TIM4}; char reply[320]; uint8_t n;
+ DMA_Channel_TypeDef channel={0}; DMA_HandleTypeDef dma={.Instance=&channel}; DAC_HandleTypeDef dac={.Instance=DAC1,.DMA_Handle1=&dma}; TIM_HandleTypeDef tim={.Instance=TIM4}; char reply[320]; uint8_t n; FskTx_Status status;
  assert(FskTx_Init(&dac,&tim)==FSK_TX_OK); assert(mock_dac_dma_length==FSK_TX_DMA_SAMPLES);
  assert(mock_dac_start_dma_count==1U); assert(mock_dac_stop_dma_count==1U);
  assert(mock_tim_start_count==1U); assert(mock_tim_stop_count==2U);
@@ -62,7 +62,8 @@ int main(void) {
  assert(FskTx_HandleUartCommand("STOP",reply,sizeof(reply))==FSK_TX_OK); assert(FskTx_HandleUartCommand("SWEEP TONE 7 1800 256",reply,sizeof(reply))==FSK_TX_OK); assert(((const uint16_t*)mock_dac_dma_data)[7] != FSK_TX_DAC_MIDPOINT); assert(FskTx_HandleUartCommand("MOD OOK",reply,sizeof(reply))==FSK_TX_ERROR_BUSY); assert(FskTx_HandleUartCommand("SWEEP OFF",reply,sizeof(reply))==FSK_TX_OK);
  assert(mock_dac_start_dma_count==1U); assert(mock_dac_stop_dma_count==1U);
  assert(mock_tim_start_count==1U); assert(mock_tim_stop_count==2U);
+ FskTx_GetStatus(&status); assert(status.render_call_count > 0U); assert(status.render_uart_budget_cycles > 0U); assert(status.render_cycle_counter_available == 0U); assert(status.render_max_cycles == 0U);
  assert(FskTx_HandleUartCommand("STATUS",reply,sizeof(reply))==FSK_TX_OK); assert(strstr(reply,"mod=FSK") != NULL); assert(strstr(reply," ccr=") != NULL); complete_line(reply);
- assert(FskTx_HandleUartCommand("HELP",reply,sizeof(reply))==FSK_TX_OK); assert(strstr(reply,"CARRIER") != NULL); complete_line(reply);
+ assert(FskTx_HandleUartCommand("HELP",reply,sizeof(reply))==FSK_TX_OK); assert(strstr(reply,"CARRIER") != NULL); assert(strstr(reply,"UART DIAG") != NULL); complete_line(reply);
  puts("PASS: HAL-mock C waveform validates OOK midpoint/1800 Hz LUT, FSK 1700/1900 Hz DMA halves/ALT, and complete UART responses"); return 0;
 }

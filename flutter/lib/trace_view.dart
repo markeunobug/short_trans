@@ -17,7 +17,7 @@ class TraceView extends StatefulWidget {
 }
 
 class _TraceViewState extends State<TraceView> {
-  int _trigger = 1, _post = 128, _cursor = 0;
+  int _cursor = 0;
   RangeValues _range = const RangeValues(0, 1);
   bool _logEnergy = false;
   static const triggers = {
@@ -181,7 +181,7 @@ class _TraceViewState extends State<TraceView> {
             SizedBox(
               width: 170,
               child: DropdownButtonFormField<int>(
-                initialValue: _trigger,
+                initialValue: ctl.triggerMask,
                 decoration: const InputDecoration(labelText: '触发条件'),
                 items: [
                   for (final t in triggers.entries)
@@ -189,13 +189,13 @@ class _TraceViewState extends State<TraceView> {
                 ],
                 onChanged: ctl.running
                     ? null
-                    : (v) => setState(() => _trigger = v!),
+                    : (v) => setState(() => ctl.triggerMask = v!),
               ),
             ),
             SizedBox(
               width: 170,
               child: DropdownButtonFormField<int>(
-                initialValue: _post,
+                initialValue: ctl.postTriggerMs,
                 decoration: const InputDecoration(labelText: '触发后 / ms'),
                 items: [
                   for (final n in [0, 64, 128, 256, 511])
@@ -203,7 +203,7 @@ class _TraceViewState extends State<TraceView> {
                 ],
                 onChanged: ctl.running
                     ? null
-                    : (v) => setState(() => _post = v!),
+                    : (v) => setState(() => ctl.postTriggerMs = v!),
               ),
             ),
             FilledButton.icon(
@@ -212,13 +212,13 @@ class _TraceViewState extends State<TraceView> {
                   : () {
                       _range = const RangeValues(0, 1);
                       _cursor = 0;
-                      ctl.start(_trigger, _post);
+                      ctl.start(ctl.triggerMask, ctl.postTriggerMs);
                     },
               icon: const Icon(Icons.fiber_manual_record),
               label: const Text('开始采集'),
             ),
             IconButton(
-              onPressed: ctl.waiting && _trigger == 1
+              onPressed: ctl.waiting && ctl.triggerMask == 1
                   ? () {
                       ctl.manualRequested = true;
                     }
@@ -261,10 +261,10 @@ class _TraceViewState extends State<TraceView> {
         const SizedBox(height: 12),
         if (capture != null) ...[
           Text(
-            '${ook ? 'OOK · 1800 Hz' : '2FSK · 1700 / 1900 Hz'}  |  FPGA 0x13  |  Capture ${capture.id}  |  ${records.length} 点',
+            '${ook ? 'OOK · 1800 Hz' : '2FSK · 1700 / 1900 Hz'}  |  FPGA ${capture.firmwareVersionHex}  |  Capture ${capture.id}  |  ${records.length} 点',
           ),
           Text(
-            'Shift ${capture.header.getUint8(7)}  |  Margin Q4.4 ${capture.header.getUint8(8)}  |  Confidence ${capture.header.getUint8(9)}${ook ? '  |  LOW ${capture.low} / HIGH ${capture.high}' : ''}',
+            'Shift ${capture.header.getUint8(7)}  |  Margin Q4.4 ${capture.header.getUint8(8)}  |  Offset ${capture.offsetUnits} (${capture.offsetUnits * 256})  |  Confidence ${capture.header.getUint8(9)}${ook ? '  |  LOW ${capture.low} / HIGH ${capture.high}' : ''}',
           ),
         ],
         if (records.isEmpty)

@@ -59,7 +59,7 @@ size_t rx_trace_command(fpga_rx_spi_t *device, const char *command,
     if (strncmp(command, "TRACE ", 6) != 0) return 0;
     if (fpga_rx_spi_probe(device, &probe[0]) != FPGA_RX_SPI_OK)
         return text(output, capacity, "ERR TRACE SPI\r\n");
-    if (probe[0] != 0x13U)
+    if ((probe[0] != 0x13U) && (probe[0] != 0x14U))
         return text(output, capacity, "ERR TRACE UNSUPPORTED\r\n");
     if (fpga_rx_spi_read_registers(device, 0x32U, &probe[1], 1) != FPGA_RX_SPI_OK)
         return text(output, capacity, "ERR TRACE SPI\r\n");

@@ -64,7 +64,8 @@ module spi1_slave (
     assign assembled_byte = {rx_shift[6:0], mosi_sync};
     assign next_read_address = ((current_address == 7'h40) ||
                                 (current_address == 7'h41) ||
-                                (current_address == 7'h42)) ?
+                                (current_address == 7'h42) ||
+                                (current_address == 7'h4e)) ?
                                current_address : current_address + 1'b1;
 
     // Raw NSS controls the output enable so deselection cannot be delayed by

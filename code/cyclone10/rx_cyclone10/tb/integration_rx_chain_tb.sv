@@ -98,7 +98,9 @@ module integration_rx_chain_tb;
         .noise_update           (noise_update)
     );
 
-    fsk_symbol_sync symbol_sync (
+    // Match the production top's bounded maximum-frame lock budget.
+    // The synchronizer's unit-test default is only 100 symbols.
+    fsk_symbol_sync #(.LOCK_TIMEOUT_SYMBOLS(640)) symbol_sync (
         .clk                           (clk),
         .reset_n                       (reset_n),
         .metric_valid                  (metric_valid),

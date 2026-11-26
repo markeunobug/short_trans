@@ -143,7 +143,9 @@ class TraceCapture {
   final ByteData header;
   final List<TraceRecord> records;
   int get mode => header.getUint8(6);
+  String get firmwareVersionHex => '0x${header.getUint8(5).toRadixString(16).padLeft(2, "0").toUpperCase()}';
   int get low => header.getUint32(12, Endian.little);
+  int get offsetUnits => header.getUint16(10, Endian.little);
   int get high => header.getUint32(16, Endian.little);
   int get sampleRate => header.getUint32(20, Endian.little);
   int get triggerIndex => header.getUint16(30, Endian.little);
@@ -169,7 +171,7 @@ class TraceCapture {
     final count = d.getUint16(28, Endian.little);
     final trigger = d.getUint16(30, Endian.little);
     if (d.getUint8(4) != 1 ||
-        d.getUint8(5) != 0x13 ||
+        (d.getUint8(5) != 0x13 && d.getUint8(5) != 0x14) ||
         ![1, 2].contains(d.getUint8(6)) ||
         d.getUint32(20, Endian.little) != 48000 ||
         d.getUint16(24, Endian.little) != 48 ||
@@ -199,7 +201,7 @@ class TraceCapture {
   }
   String toCsv() {
     final rows = <String>[
-      '# format=1,fpga_fw=19,capture_id=$id,mode=$mode,rate=$sampleRate,low=$low,high=$high,interrupted=$interrupted',
+      '# format=1,fpga_fw=${header.getUint8(5)},capture_id=$id,mode=$mode,rate=$sampleRate,low=$low,high=$high,fsk_offset_units=${offsetUnits},fsk_offset_energy=${offsetUnits * 256},interrupted=$interrupted',
       '# config_bytes=${raw.sublist(6, 20).join(' ')}',
       'sample,time_ms,energy0,energy1,noise,threshold,soft,confidence,confidence_threshold,hard_bit,locked,sampled_bit,bit_count,phase,timing,flags,events',
       for (final r in records)

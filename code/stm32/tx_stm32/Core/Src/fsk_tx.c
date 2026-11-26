@@ -52,6 +52,11 @@ typedef struct
     uint32_t sweep_phase_accumulator;
     volatile uint32_t rendered_symbols;
     volatile uint32_t dma_error_count;
+    volatile uint32_t render_max_cycles;
+    volatile uint32_t render_uart_budget_cycles;
+    volatile uint32_t render_over_uart_budget_count;
+    volatile uint32_t render_call_count;
+    volatile uint8_t render_cycle_counter_available;
     volatile FskTx_Result last_error;
     uint32_t timer_clock_hz;
     uint32_t sample_rate_hz;
@@ -64,6 +69,32 @@ typedef struct
 } FskTx_Context;
 
 static FskTx_Context s_tx;
+
+static uint32_t FskTx_RenderClockStart(void)
+{
+#if defined(DWT) && defined(DWT_CTRL_CYCCNTENA_Msk)
+    return DWT->CYCCNT;
+#else
+    return 0U;
+#endif
+}
+
+static void FskTx_RenderClockStop(uint32_t started)
+{
+    ++s_tx.render_call_count;
+#if defined(DWT) && defined(DWT_CTRL_CYCCNTENA_Msk)
+    if (s_tx.render_cycle_counter_available != 0U)
+    {
+        uint32_t elapsed = DWT->CYCCNT - started;
+        if (elapsed > s_tx.render_max_cycles) s_tx.render_max_cycles = elapsed;
+        if ((s_tx.render_uart_budget_cycles != 0U) &&
+            (elapsed >= s_tx.render_uart_budget_cycles))
+            ++s_tx.render_over_uart_budget_count;
+    }
+#else
+    (void)started;
+#endif
+}
 
 #include "fsk_tone_tables.h"
 
@@ -482,6 +513,7 @@ static void FskTx_RenderHalf(uint16_t *destination)
     uint16_t table_length;
     uint16_t index;
     int8_t symbol;
+    uint32_t render_started = FskTx_RenderClockStart();
 
     if (s_tx.active_mode == FSK_TX_MODE_SWEEP_TONE)
     {
@@ -492,6 +524,7 @@ static void FskTx_RenderHalf(uint16_t *destination)
             s_tx.sweep_phase_accumulator += s_tx.sweep_phase_increment;
         }
         ++s_tx.rendered_symbols;
+        FskTx_RenderClockStop(render_started);
         return;
     }
 
@@ -534,6 +567,7 @@ static void FskTx_RenderHalf(uint16_t *destination)
     }
 
     ++s_tx.rendered_symbols;
+    FskTx_RenderClockStop(render_started);
 }
 
 static FskTx_Result FskTx_RestartDmaStream(void)
@@ -593,6 +627,21 @@ FskTx_Result FskTx_Init(DAC_HandleTypeDef *hdac, TIM_HandleTypeDef *htim)
     s_tx.modulation = FSK_TX_MODULATION_FSK;
     s_tx.last_error = FSK_TX_OK;
     s_tx.timer_clock_hz = FskTx_GetTim4ClockHz();
+    s_tx.render_uart_budget_cycles = (uint32_t)(((uint64_t)HAL_RCC_GetHCLKFreq() * 10U + 115199U) / 115200U);
+#if defined(DWT) && defined(CoreDebug_DEMCR_TRCENA_Msk) && defined(DWT_CTRL_CYCCNTENA_Msk)
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0U;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    {
+        uint32_t initial_cycles = DWT->CYCCNT;
+        __NOP(); __NOP(); __NOP(); __NOP();
+        __NOP(); __NOP(); __NOP(); __NOP();
+        /* A locked/missing CYCCNT must not report zero as a fast render. */
+        s_tx.render_cycle_counter_available =
+            ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) != 0U) &&
+            (DWT->CYCCNT != initial_cycles);
+    }
+#endif
 
     if (FskTx_FindTimerDividers(s_tx.timer_clock_hz,
                                 &prescaler,
@@ -925,6 +974,11 @@ void FskTx_GetStatus(FskTx_Status *status)
     status->dac_hal_error = HAL_DAC_GetError(s_tx.hdac);
     status->dma_remaining = __HAL_DMA_GET_COUNTER(s_tx.hdac->DMA_Handle1);
     status->dma_ccr = s_tx.hdac->DMA_Handle1->Instance->CCR;
+    status->render_max_cycles = s_tx.render_max_cycles;
+    status->render_uart_budget_cycles = s_tx.render_uart_budget_cycles;
+    status->render_over_uart_budget_count = s_tx.render_over_uart_budget_count;
+    status->render_call_count = s_tx.render_call_count;
+    status->render_cycle_counter_available = s_tx.render_cycle_counter_available;
     FskTx_ExitCritical(primask);
 }
 
@@ -1307,7 +1361,7 @@ FskTx_Result FskTx_HandleUartCommand(const char *line,
                           "OK AMP n | PAYLOAD hex|- | META v t seq | "
                           "SET_TIME YYYY-MM-DD HH:MM:SS | TIME_BASE | "
                           "MODE SILENCE|TONE1700|TONE1900|ALT|PRBS|PACKET|CARRIER|CARRIER1800 | "
-                          "MOD FSK|OOK | SWEEP INFO|TONE|OFF | SEND | STOP | STATUS\r\n");
+                          "MOD FSK|OOK | SWEEP INFO|TONE|OFF | SEND | STOP | STATUS | UART DIAG\r\n");
         return FSK_TX_OK;
     }
     if (FskTx_TokenEquals(line, "SWEEP") != 0U)

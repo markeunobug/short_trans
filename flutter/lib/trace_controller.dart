@@ -38,6 +38,8 @@ class TraceController {
   final Future<Uint8List> Function(int, int, int) readBlock;
   final void Function() changed;
   TraceCapture? capture;
+  int triggerMask = 1;
+  int postTriggerMs = 128;
   bool running = false, waiting = false;
   bool manualRequested = false, stopRequested = false;
   double progress = 0;

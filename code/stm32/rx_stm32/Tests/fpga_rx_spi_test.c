@@ -100,6 +100,27 @@ static uint32_t mock_u32_le(const uint8_t *bytes)
            ((uint32_t)bytes[3] << 24U);
 }
 
+static void mock_fsk_control_write(mock_fpga_t *mock, uint8_t value)
+{
+    if ((value & FPGA_RX_FSK_CONFIG_CLEAR_ERROR) != 0U)
+        mock->registers[FPGA_RX_REG_FSK_CONFIG_STATUS] &= (uint8_t)~2U;
+    if ((value & FPGA_RX_FSK_CONFIG_COMMIT) != 0U) {
+        if ((mock->registers[FPGA_RX_REG_FSK_CONFIG_STATUS] & 1U) != 0U ||
+            mock->registers[FPGA_RX_REG_RX_MODE_ACTIVE] != FPGA_RX_SPI_MODE_FSK ||
+            mock->registers[FPGA_RX_REG_FSK_MARGIN_SHADOW] == 0U) {
+            mock->registers[FPGA_RX_REG_FSK_CONFIG_STATUS] |= 2U;
+        } else {
+            mock->registers[FPGA_RX_REG_ENERGY_MARGIN] =
+                mock->registers[FPGA_RX_REG_FSK_MARGIN_SHADOW];
+            mock->registers[FPGA_RX_REG_NOISE_OFFSET_L] =
+                mock->registers[FPGA_RX_REG_FSK_MARGIN_SHADOW + 1U];
+            mock->registers[FPGA_RX_REG_NOISE_OFFSET_H] =
+                mock->registers[FPGA_RX_REG_FSK_MARGIN_SHADOW + 2U];
+            ++mock->registers[FPGA_RX_REG_FSK_CONFIG_GENERATION];
+        }
+    }
+}
+
 static void mock_ask_control_write(mock_fpga_t *mock, uint8_t value)
 {
     uint32_t low = mock_u32_le(&mock->registers[FPGA_RX_REG_ASK_LOW_SHADOW_0]);
@@ -177,6 +198,8 @@ static void mock_write_register(mock_fpga_t *mock, uint8_t address, uint8_t valu
 {
     if (address == FPGA_RX_REG_CONTROL) {
         mock_control_write(mock, value);
+    } else if (address == FPGA_RX_REG_FSK_CONFIG_CONTROL) {
+        mock_fsk_control_write(mock, value);
     } else if (address == FPGA_RX_REG_ASK_CONFIG_CONTROL) {
         mock_ask_control_write(mock, value);
     } else {
@@ -288,6 +311,8 @@ int main(void)
     fpga_rx_spi_sweep_result_t sweep_result;
     fpga_rx_spi_ask_config_t ask_config;
     fpga_rx_spi_ask_status_t ask_status;
+    fpga_rx_spi_fsk_config_t fsk_config;
+    fpga_rx_spi_fsk_status_t fsk_status;
     fpga_rx_spi_frame_meta_t metadata;
     int32_t samples[FPGA_RX_SPI_SNAPSHOT_WORDS];
     uint8_t firmware_version;
@@ -315,6 +340,10 @@ int main(void)
     mock.registers[FPGA_RX_REG_LAST_ENERGY_0] = 11U;
     mock.registers[FPGA_RX_REG_LAST_ENERGY_1] = 22U;
     mock.registers[FPGA_RX_REG_LAST_CONFIDENCE] = 33U;
+    mock.registers[FPGA_RX_REG_ENERGY_MARGIN] = 0x40U;
+    mock.registers[FPGA_RX_REG_NOISE_OFFSET_L] = 0x34U;
+    mock.registers[FPGA_RX_REG_NOISE_OFFSET_H] = 0x12U;
+    mock.registers[FPGA_RX_REG_RX_MODE_ACTIVE] = FPGA_RX_SPI_MODE_FSK;
     mock.registers[FPGA_RX_REG_RX_MODE_SHADOW] = FPGA_RX_SPI_MODE_FSK;
     mock.registers[FPGA_RX_REG_RX_MODE_ACTIVE] = FPGA_RX_SPI_MODE_FSK;
     mock.registers[FPGA_RX_REG_ASK_LOW_SHADOW_0] = 0x90U;
@@ -391,6 +420,27 @@ int main(void)
     CHECK(ask_status.hard_bit == 1U);
     CHECK(ask_status.symbol_locked == 0U);
     CHECK(ask_status.energy_ready == 1U);
+
+    CHECK(fpga_rx_spi_fsk_read_status(&device, &fsk_status) == FPGA_RX_SPI_OK);
+    CHECK(fsk_status.mode == FPGA_RX_SPI_MODE_FSK);
+    CHECK(fsk_status.active.energy_margin_q4_4 == 0x40U);
+    CHECK(fsk_status.active.noise_offset_units == 0x1234U);
+    fsk_config.energy_margin_q4_4 = 0x30U;
+    fsk_config.noise_offset_units = 0x5678U;
+    CHECK(fpga_rx_spi_fsk_apply_config(&device, &fsk_config, &fsk_status) == FPGA_RX_SPI_OK);
+    CHECK(mock.registers[FPGA_RX_REG_ENERGY_MARGIN] == 0x30U);
+    CHECK(mock.registers[FPGA_RX_REG_NOISE_OFFSET_L] == 0x78U);
+    CHECK(mock.registers[FPGA_RX_REG_NOISE_OFFSET_H] == 0x56U);
+    CHECK(fsk_status.active.noise_offset_units == 0x5678U);
+    CHECK(fsk_status.generation == 1U);
+    mock.registers[FPGA_RX_REG_RX_MODE_ACTIVE] = FPGA_RX_SPI_MODE_OOK;
+    CHECK(fpga_rx_spi_fsk_apply_config(&device, &fsk_config, &fsk_status) ==
+          FPGA_RX_SPI_BAD_STATE);
+    mock.registers[FPGA_RX_REG_RX_MODE_ACTIVE] = FPGA_RX_SPI_MODE_FSK;
+    mock.registers[FPGA_RX_REG_FW_VERSION] = 0x13U;
+    CHECK(fpga_rx_spi_fsk_read_status(&device, &fsk_status) ==
+          FPGA_RX_SPI_PROTOCOL_ERROR);
+    mock.registers[FPGA_RX_REG_FW_VERSION] = FPGA_RX_SPI_PROTOCOL_VERSION;
 
     ask_config.mode = FPGA_RX_SPI_MODE_OOK;
     ask_config.low_threshold = 0x11223344UL;

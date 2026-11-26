@@ -119,6 +119,19 @@ static fpga_rx_spi_result_t fpga_rx_spi_ask_require_firmware(
                : FPGA_RX_SPI_PROTOCOL_ERROR;
 }
 
+static fpga_rx_spi_result_t fpga_rx_spi_fsk_require_firmware(
+    fpga_rx_spi_t *device)
+{
+    uint8_t firmware_version;
+    fpga_rx_spi_result_t result;
+
+    if (device == NULL) return FPGA_RX_SPI_INVALID_ARGUMENT;
+    result = fpga_rx_spi_read_registers(
+        device, FPGA_RX_REG_FW_VERSION, &firmware_version, 1U);
+    if (result != FPGA_RX_SPI_OK) return result;
+    return (firmware_version >= FPGA_RX_SPI_FSK_TUNING_MIN_FW_VERSION &&
+            firmware_version != 0xFFU) ? FPGA_RX_SPI_OK : FPGA_RX_SPI_PROTOCOL_ERROR;
+}
 static bool fpga_rx_spi_ask_config_valid(const fpga_rx_spi_ask_config_t *config)
 {
     return (config != NULL) &&
@@ -185,7 +198,8 @@ fpga_rx_spi_result_t fpga_rx_spi_read_registers(
     }
     if ((address == FPGA_RX_REG_RX_DATA) ||
         (address == FPGA_RX_REG_SNAPSHOT_DATA) ||
-        (address == FPGA_RX_REG_TRACE_DATA)) {
+        (address == FPGA_RX_REG_TRACE_DATA) ||
+        (address == FPGA_RX_REG_BER_DATA)) {
         return fpga_rx_spi_read_stream(device, address, data, length);
     }
 
@@ -234,7 +248,8 @@ fpga_rx_spi_result_t fpga_rx_spi_write_registers(
         ((address & ~FPGA_RX_SPI_ADDRESS_MASK) != 0U) ||
         (address == FPGA_RX_REG_RX_DATA) ||
         (address == FPGA_RX_REG_SNAPSHOT_DATA) ||
-        (address == FPGA_RX_REG_TRACE_DATA)) {
+        (address == FPGA_RX_REG_TRACE_DATA) ||
+        (address == FPGA_RX_REG_BER_DATA)) {
         return FPGA_RX_SPI_INVALID_ARGUMENT;
     }
 
@@ -479,6 +494,86 @@ fpga_rx_spi_result_t fpga_rx_spi_sweep_read_result(
                : FPGA_RX_SPI_OK;
 }
 
+fpga_rx_spi_result_t fpga_rx_spi_fsk_read_status(
+    fpga_rx_spi_t *device,
+    fpga_rx_spi_fsk_status_t *status)
+{
+    uint8_t values[4], flags, generation_before, generation_after, mode;
+    fpga_rx_spi_result_t result;
+    uint8_t attempt;
+
+    if ((device == NULL) || (status == NULL)) return FPGA_RX_SPI_INVALID_ARGUMENT;
+    result = fpga_rx_spi_fsk_require_firmware(device);
+    if (result != FPGA_RX_SPI_OK) return result;
+
+    for (attempt = 0U; attempt < 3U; ++attempt) {
+        result = fpga_rx_spi_read_registers(device,
+            FPGA_RX_REG_FSK_CONFIG_GENERATION, &generation_before, 1U);
+        if (result != FPGA_RX_SPI_OK) return result;
+        result = fpga_rx_spi_read_registers(device,
+            FPGA_RX_REG_FSK_CONFIG_STATUS, &flags, 1U);
+        if (result != FPGA_RX_SPI_OK) return result;
+        result = fpga_rx_spi_read_registers(device,
+            FPGA_RX_REG_ENERGY_MARGIN, values, sizeof(values));
+        if (result != FPGA_RX_SPI_OK) return result;
+        result = fpga_rx_spi_read_registers(device,
+            FPGA_RX_REG_RX_MODE_ACTIVE, &mode, 1U);
+        if (result != FPGA_RX_SPI_OK) return result;
+        result = fpga_rx_spi_read_registers(device,
+            FPGA_RX_REG_FSK_CONFIG_GENERATION, &generation_after, 1U);
+        if (result != FPGA_RX_SPI_OK) return result;
+        if (generation_before == generation_after) {
+            status->active.energy_margin_q4_4 = values[0];
+            status->active.noise_offset_units = (uint16_t)values[2] |
+                ((uint16_t)values[3] << 8U);
+            status->pending = (uint8_t)((flags & 1U) != 0U);
+            status->error = (uint8_t)((flags & 2U) != 0U);
+            status->rx_busy = (uint8_t)((flags & 4U) != 0U);
+            status->sweep_active = (uint8_t)((flags & 8U) != 0U);
+            status->mode = (uint8_t)(mode & 3U);
+            status->generation = generation_after;
+            return status->active.energy_margin_q4_4 == 0U
+                ? FPGA_RX_SPI_PROTOCOL_ERROR : FPGA_RX_SPI_OK;
+        }
+    }
+    return FPGA_RX_SPI_PROTOCOL_ERROR;
+}
+
+fpga_rx_spi_result_t fpga_rx_spi_fsk_apply_config(
+    fpga_rx_spi_t *device,
+    const fpga_rx_spi_fsk_config_t *config,
+    fpga_rx_spi_fsk_status_t *status)
+{
+    uint8_t staged[3], control;
+    fpga_rx_spi_result_t result;
+
+    if ((device == NULL) || (config == NULL) || (status == NULL) ||
+        (config->energy_margin_q4_4 == 0U)) return FPGA_RX_SPI_INVALID_ARGUMENT;
+    result = fpga_rx_spi_fsk_read_status(device, status);
+    if (result != FPGA_RX_SPI_OK) return result;
+    if (status->mode != FPGA_RX_SPI_MODE_FSK || status->pending != 0U)
+        return FPGA_RX_SPI_BAD_STATE;
+    if (status->error != 0U) {
+        control = FPGA_RX_FSK_CONFIG_CLEAR_ERROR;
+        result = fpga_rx_spi_write_registers(
+            device, FPGA_RX_REG_FSK_CONFIG_CONTROL, &control, 1U);
+        if (result != FPGA_RX_SPI_OK) return result;
+    }
+
+    staged[0] = config->energy_margin_q4_4;
+    staged[1] = (uint8_t)config->noise_offset_units;
+    staged[2] = (uint8_t)(config->noise_offset_units >> 8U);
+    result = fpga_rx_spi_write_registers(
+        device, FPGA_RX_REG_FSK_MARGIN_SHADOW, staged, sizeof(staged));
+    if (result != FPGA_RX_SPI_OK) return result;
+    control = FPGA_RX_FSK_CONFIG_COMMIT;
+    result = fpga_rx_spi_write_registers(
+        device, FPGA_RX_REG_FSK_CONFIG_CONTROL, &control, 1U);
+    if (result != FPGA_RX_SPI_OK) return result;
+    result = fpga_rx_spi_fsk_read_status(device, status);
+    if (result != FPGA_RX_SPI_OK) return result;
+    return status->error ? FPGA_RX_SPI_PROTOCOL_ERROR : FPGA_RX_SPI_OK;
+}
 fpga_rx_spi_result_t fpga_rx_spi_ask_stage_config(
     fpga_rx_spi_t *device,
     const fpga_rx_spi_ask_config_t *config)

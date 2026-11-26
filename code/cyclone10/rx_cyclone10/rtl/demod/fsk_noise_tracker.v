@@ -13,7 +13,7 @@ module fsk_noise_tracker #(
     input  wire                         noise_track_enable,
     input  wire                         carrier_active,
     input  wire [7:0]                   noise_multiplier_q4_4,
-    input  wire [ENERGY_WIDTH-1:0]      noise_offset,
+    input  wire [15:0]                  noise_offset,
     output reg  [ENERGY_WIDTH-1:0]      noise_energy,
     output wire [ENERGY_WIDTH-1:0]      carrier_threshold,
     output wire                         energy_above_threshold,
@@ -27,8 +27,10 @@ module fsk_noise_tracker #(
         multiplied_noise + {{(ENERGY_WIDTH+4){1'b0}}, 4'd8};
     wire [ENERGY_WIDTH+7:0] scaled_noise =
         rounded_multiplied_noise >> 4;
+    wire [ENERGY_WIDTH+7:0] scaled_offset =
+        {{(ENERGY_WIDTH-16){1'b0}}, noise_offset, 8'b0};
     wire [ENERGY_WIDTH+8:0] threshold_sum =
-        {1'b0, scaled_noise} + {{9{1'b0}}, noise_offset};
+        {1'b0, scaled_noise} + {1'b0, scaled_offset};
 
     assign carrier_threshold =
         (|(threshold_sum[ENERGY_WIDTH+8:ENERGY_WIDTH])) ?

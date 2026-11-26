@@ -20,15 +20,47 @@ FIFO bus crosses between unrelated clocks. The implementation requires
 
 ## Registers
 
-Firmware 0x13 additionally reserves 0x32..0x3F and streaming read port
-0x42 for the independent passive trace peripheral. The stream address stays
-selected across a burst, like 0x40/0x41. The complete capture, record and
-transport contract is in codex/DEMOD_TRACE_PROTOCOL.md at the repository root.
+Firmware 0x14 adds FSK tuning registers at 0x43..0x48. The trace
+peripheral uses 0x32..0x3F and the 0x42 stream port. FSK tuning addresses
+0x43..0x48 use the normal auto-increment register path and do not overlap trace capture.
+The trace capture, record and transport contract is in codex/DEMOD_TRACE_PROTOCOL.md.
+
+The optional passive BER observer occupies **0x49..0x4F** only; detection uses
+ID `0xB1` and schema `2` (legacy schema `1` is accepted by the MCU for legacy commands), independently of the unchanged production FW_VERSION.
+`0x4E` is a fixed-address stream like `0x40..0x42`. Existing FSK tuning,
+trace, sweep and normal packet FIFO registers retain their current meanings.
+
+| Address | BER name | Access | Definition |
+|---:|---|---|---|
+| `0x49` | `BER_ID` | R | `0xB1` |
+| `0x4A` | `BER_CONTROL` | W | Exact one-shot value: 1 START, 2 STOP, 4 CLEAR, 8 POP; combinations rejected |
+| `0x4B` | `BER_STATUS` | R | enabled bit0, capturing/publishing bit1, queue ready bit2, full bit3, FSK chain available bit4 |
+| `0x4C` | `BER_COUNT` | R | Committed records 0..8 |
+| `0x4D` | `BER_OFFSET` | R/W | Seek record byte 0..63, or status byte 0x80..0x9F |
+| `0x4E` | `BER_DATA` | R | Non-destructive head/status byte; advances private offset; seek before retry |
+| `0x4F` | `BER_SCHEMA` | R | `2`: BR01/BS01 plus per-window BO01 stage evidence |
+
+Reset disables BER. START requires disabled, idle, empty and FSK available,
+and starts fresh session counters. STOP disables immediately and publishes a
+partial active capture, if any; publication takes 64 clk_sys cycles. CLEAR
+requires disabled and idle. POP changes only the diagnostic queue; the MCU
+validates the current head capture ID before issuing it. SPI itself has a
+single owner and no atomic capture-ID register. No automatic diagnostic POP.
+Read head stays immutable until POP/CLEAR. Sync while capturing/publishing is
+counted as missed_sync without restarting; full queue drops the new record.
+
+Writing offset `0x80` latches one coherent 32-byte snapshot: `BS01`, state,
+count, depth=8, record_size=64, then six LE32 counters at offsets 8,12,16,20,24,28:
+started, dropped-full, committed, protocol_errors, popped, missed_sync.
+Re-seek `0x81..0x9F` to retry part of the same snapshot; `0x80` relatches it.
+The full 64-byte record layout and software command/statistics contract are in
+`codex/BER_PROTOCOL.md`. The observer always computes its CRC8/CRC16 and never
+feeds any signal back to normal demod/parser/FIFO/reset/control logic.
 
 | Address | Name | Access | Definition |
 |---:|---|---|---|
 | `0x00` | `DEVICE_ID` | R | `0xA7` |
-| `0x01` | `FW_VERSION` | R | `0x13` with passive demodulation trace capture |
+| `0x01` | `FW_VERSION` | R | `0x14` with FSK tuning and passive trace capture |
 | `0x02` | `STATUS0` | R | Status bits below |
 | `0x03` | `ERROR_FLAGS` | R | Sticky/live error bits below |
 | `0x04` | `FRAME_COUNT` | R | Number of committed descriptors, 0..8 |
@@ -43,10 +75,10 @@ transport contract is in codex/DEMOD_TRACE_PROTOCOL.md at the repository root.
 | `0x0D` | `CRC_ERROR_H` | R | Decoder CRC error counter bits 15:8 |
 | `0x10` | `CONTROL` | W | One-shot controls below |
 | `0x11` | `SAMPLE_SHIFT` | R/W | Right shift in bits 4:0; reset value 12 |
-| `0x12` | `ENERGY_MARGIN` | R/W | Noise multiplier in unsigned Q4.4; reset `0x20` = 2.0x |
+| `0x12` | `ENERGY_MARGIN` | R/W | Active noise multiplier in unsigned Q4.4; reset `0x20` = 2.0x |
 | `0x13` | `CONF_THRESHOLD` | R/W | Confidence threshold; reset value `0x20` |
-| `0x14` | `NOISE_OFFSET_L` | R/W | Fixed noise-floor offset low byte; reset value 200 |
-| `0x15` | `NOISE_OFFSET_H` | R/W | Fixed noise-floor offset high byte; reset value 0 |
+| `0x14` | `NOISE_OFFSET_L` | R/W | Active coarse offset low byte; each offset unit adds 256 energy counts |
+| `0x15` | `NOISE_OFFSET_H` | R/W | Active coarse offset high byte; reset offset is 200 units |
 | `0x16` | `HEAD_TIME_FLAGS` | R | Bit 0 timestamp valid; bit 1 TIME_BASE descriptor; bits 7:2 zero |
 | `0x17` | `HEAD_TIMESTAMP_B3` | R | Queue-head timestamp bits 31:24 |
 | `0x18` | `HEAD_TIMESTAMP_B2` | R | Queue-head timestamp bits 23:16 |
@@ -67,6 +99,11 @@ transport contract is in codex/DEMOD_TRACE_PROTOCOL.md at the repository root.
 | `0x31` | `SNAPSHOT_COUNT_H` | R | Unread snapshot words bits 10:8 |
 | `0x40` | `RX_DATA` | R | Destructive queue-head Payload byte port |
 | `0x41` | `SNAPSHOT_DATA` | R | Destructive raw sample byte stream |
+| `0x43` | `FSK_MARGIN_SHADOW` | R/W | Staged Q4.4 multiplier; 32=2.0x |
+| `0x44..0x45` | `FSK_OFFSET_SHADOW` | R/W | Staged uint16 offset units, little-endian; one unit adds 256 energy counts |
+| `0x46` | `FSK_CONFIG_CONTROL` | W | bit0 COMMIT; bit1 clear rejected-config sticky |
+| `0x47` | `FSK_CONFIG_STATUS` | R | bit0 pending; bit1 rejected; bit2 receiver busy; bit3 sweep active |
+| `0x48` | `FSK_CONFIG_GENERATION` | R | Incremented after deferred FSK apply |
 | `0x65` | `RX_MODE_SHADOW` | R/W | Full-byte staged receiver mode: 1 FSK, 2 OOK |
 | `0x66..0x69` | `ASK_LOW_SHADOW` | R/W | Staged OOK low threshold, uint32 little-endian |
 | `0x6A..0x6D` | `ASK_HIGH_SHADOW` | R/W | Staged OOK high threshold, uint32 little-endian |
@@ -165,3 +202,14 @@ words still owned by `adc_snapshot` and words already prefetched by SPI logic.
 `COMMIT` snapshots all three shadow fields only when no prior transaction is pending. It rejects mode values other than 1/2 and `LOW >= HIGH`; shadow writes never alter a pending transaction. A valid pending transaction applies only after candidate/frame processing and sweep are inactive. Applying resets the selected demodulator history but does not clear the packet FIFO or parser TIME_BASE state.
 
 The fixed OOK decision is `energy >= HIGH` => one, `energy <= LOW` => zero, with the prior bit retained strictly inside the hysteresis band. The energy metric is the saturated `((I*I + Q*Q) >> 28)` from an 80-sample, 1800 Hz Q7 I/Q sliding correlator; 400/600 are provisional software defaults.
+
+
+### BER schema 2 per-window observer
+
+Same 0x49..0x4F address range. CONTROL adds 0x10 window ARM, 0x20 freeze,
+0x80..0x8F event-page selection. OFFSET 0xA0..0xFF reads the frozen 96-byte
+BO01 summary; 0x40..0x7F reads the selected frozen 64-byte event page. BR01
+0..63 and BS01 0x80..0x9F are unchanged. BER STOP freezes an active observer.
+The observer writes no production controls and does not operate the existing
+TRACE recorder. Full field/event/overflow semantics: codex/BER_PROTOCOL.md,
+"Per-transmit-window stage evidence".

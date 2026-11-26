@@ -10,8 +10,9 @@ extern "C" {
 #endif
 
 #define FPGA_RX_SPI_DEVICE_ID             0xA7U
-#define FPGA_RX_SPI_PROTOCOL_VERSION      0x13U
+#define FPGA_RX_SPI_PROTOCOL_VERSION      0x14U
 #define FPGA_RX_SPI_ASK_MIN_FW_VERSION    0x12U
+#define FPGA_RX_SPI_FSK_TUNING_MIN_FW_VERSION 0x14U
 #define FPGA_RX_SPI_MAX_PAYLOAD           64U
 #define FPGA_RX_SPI_SNAPSHOT_WORDS        1024U
 #define FPGA_RX_SPI_SNAPSHOT_BYTES        4096U
@@ -132,6 +133,21 @@ typedef struct {
     uint8_t generation;
 } fpga_rx_spi_ask_status_t;
 
+typedef struct {
+    uint8_t energy_margin_q4_4;
+    uint16_t noise_offset_units;
+} fpga_rx_spi_fsk_config_t;
+
+typedef struct {
+    fpga_rx_spi_fsk_config_t active;
+    uint8_t pending;
+    uint8_t error;
+    uint8_t rx_busy;
+    uint8_t sweep_active;
+    uint8_t mode;
+    uint8_t generation;
+} fpga_rx_spi_fsk_status_t;
+
 enum {
     FPGA_RX_REG_DEVICE_ID = 0x00U,
     FPGA_RX_REG_FW_VERSION = 0x01U,
@@ -174,6 +190,12 @@ enum {
     FPGA_RX_REG_RX_DATA = 0x40U,
     FPGA_RX_REG_SNAPSHOT_DATA = 0x41U,
     FPGA_RX_REG_TRACE_DATA = 0x42U,
+    FPGA_RX_REG_BER_DATA = 0x4EU,
+    FPGA_RX_REG_FSK_MARGIN_SHADOW = 0x43U,
+    FPGA_RX_REG_FSK_OFFSET_L_SHADOW = 0x44U,
+    FPGA_RX_REG_FSK_CONFIG_CONTROL = 0x46U,
+    FPGA_RX_REG_FSK_CONFIG_STATUS = 0x47U,
+    FPGA_RX_REG_FSK_CONFIG_GENERATION = 0x48U,
     FPGA_RX_REG_SWEEP_SUM_0 = 0x50U,
     FPGA_RX_REG_SWEEP_COUNT = 0x64U,
     FPGA_RX_REG_RX_MODE_SHADOW = 0x65U,
@@ -198,6 +220,11 @@ enum {
     FPGA_RX_STATUS_SNAPSHOT_AVAILABLE = (1U << 2),
     FPGA_RX_STATUS_SNAPSHOT_BUSY = (1U << 1),
     FPGA_RX_STATUS_FRAME_INGRESS = (1U << 0)
+};
+
+enum {
+    FPGA_RX_FSK_CONFIG_COMMIT = (1U << 0),
+    FPGA_RX_FSK_CONFIG_CLEAR_ERROR = (1U << 1)
 };
 
 enum {
@@ -294,6 +321,14 @@ fpga_rx_spi_result_t fpga_rx_spi_sweep_read_status(
 fpga_rx_spi_result_t fpga_rx_spi_sweep_read_result(
     fpga_rx_spi_t *device,
     fpga_rx_spi_sweep_result_t *result);
+
+fpga_rx_spi_result_t fpga_rx_spi_fsk_read_status(
+    fpga_rx_spi_t *device,
+    fpga_rx_spi_fsk_status_t *status);
+fpga_rx_spi_result_t fpga_rx_spi_fsk_apply_config(
+    fpga_rx_spi_t *device,
+    const fpga_rx_spi_fsk_config_t *config,
+    fpga_rx_spi_fsk_status_t *status);
 
 fpga_rx_spi_result_t fpga_rx_spi_ask_stage_config(
     fpga_rx_spi_t *device,

@@ -29,6 +29,7 @@ module spi_task7_tb;
     reg i2s_error = 1'b0;
     reg cdc_error = 1'b0;
     reg protocol_error = 1'b0;
+    reg rx_busy = 1'b0;
     reg [15:0] crc_error_count = 16'h1234;
     reg [15:0] last_soft_metric = 16'h89AB;
     reg [7:0] last_energy_f0 = 8'h31;
@@ -57,6 +58,8 @@ module spi_task7_tb;
     wire adc_reinit_pulse;
     wire [4:0] sample_shift;
     wire [7:0] energy_margin;
+    wire [15:0] noise_offset;
+    wire config_apply_pulse;
     wire [7:0] confidence_threshold;
 
     integer failures = 0;
@@ -107,7 +110,7 @@ module spi_task7_tb;
         .last_energy_f1            (last_energy_f1),
         .last_confidence           (last_confidence),
         // Optional telemetry sources are idle in this SPI/FIFO test.
-        .rx_busy                   (1'b0),
+        .rx_busy                   (rx_busy),
         .ook_energy                (32'd0),
         .ook_hard_bit              (1'b0),
         .ook_symbol_locked         (1'b0),
@@ -141,7 +144,18 @@ module spi_task7_tb;
         .adc_reinit_pulse          (adc_reinit_pulse),
         .snapshot_start_pulse      (snapshot_trigger),
         .sample_shift              (sample_shift),
-        .energy_margin             (energy_margin),
+.energy_margin             (energy_margin),
+        .noise_offset              (noise_offset),
+        .config_apply_pulse        (config_apply_pulse),
+        .sweep_start_pulse         (),
+        .sweep_abort_pulse         (),
+        .sweep_phase_increment     (),
+        .sweep_settle_samples      (),
+        .sweep_window_samples      (),
+        .sweep_average_count       (),
+        .rx_mode_active            (),
+        .ask_low_active            (),
+        .ask_high_active           (),
         .confidence_threshold      (confidence_threshold)
     );
 
@@ -282,7 +296,7 @@ module spi_task7_tb;
         spi_transfer(8'h00, rx_byte);
         check_byte(rx_byte, 8'hA7, "DEVICE_ID");
         spi_transfer(8'h00, rx_byte);
-        check_byte(rx_byte, 8'h13, "FW_VERSION");
+        check_byte(rx_byte, 8'h14, "FW_VERSION");
         spi_end();
 
         spi_begin();
@@ -301,6 +315,50 @@ module spi_task7_tb;
         check_byte(rx_byte, 8'h56, "CONF_THRESHOLD R/W");
         spi_end();
 
+        // FSK threshold config is staged while busy and applied atomically when idle.
+        rx_busy = 1'b1;
+        spi_begin();
+        spi_transfer(8'h43, dummy_byte);
+        spi_transfer(8'h30, dummy_byte);
+        spi_transfer(8'h34, dummy_byte);
+        spi_transfer(8'h12, dummy_byte);
+        spi_end();
+        spi_write_one(7'h46, 8'h01);
+        spi_read_one(7'h47, rx_byte);
+        if (!rx_byte[0] || !rx_byte[2]) begin
+            $display("FAIL: busy FSK config was not held pending");
+            failures = failures + 1;
+        end
+        if (energy_margin != 8'h34 || noise_offset != 16'd200) begin
+            $display("FAIL: FSK config changed while receiver was busy");
+            failures = failures + 1;
+        end
+        rx_busy = 1'b0;
+        repeat (3) @(posedge clk_sys);
+        spi_read_one(7'h47, rx_byte);
+        if (rx_byte[0] || rx_byte[1]) begin
+            $display("FAIL: FSK config did not complete cleanly");
+            failures = failures + 1;
+        end
+        if (energy_margin != 8'h30 || noise_offset != 16'h1234) begin
+            $display("FAIL: FSK active config did not update after idle");
+            failures = failures + 1;
+        end
+        spi_read_one(7'h48, rx_byte);
+        check_byte(rx_byte, 8'h01, "FSK config generation");
+        spi_write_one(7'h43, 8'h00);
+        spi_write_one(7'h46, 8'h01);
+        spi_read_one(7'h47, rx_byte);
+        if (!rx_byte[1]) begin
+            $display("FAIL: zero FSK margin was not rejected");
+            failures = failures + 1;
+        end
+        spi_write_one(7'h46, 8'h02);
+        spi_read_one(7'h47, rx_byte);
+        if (rx_byte[1]) begin
+            $display("FAIL: FSK config error did not clear");
+            failures = failures + 1;
+        end
         // Diagnostic auto increment and byte ordering.
         spi_begin();
         spi_transfer(8'hA0, dummy_byte);

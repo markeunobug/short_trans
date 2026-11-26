@@ -8,7 +8,7 @@ module fsk_noise_tracker_tb;
     logic noise_track_enable;
     logic carrier_active;
     logic [7:0] noise_multiplier_q4_4;
-    logic [32:0] noise_offset;
+    logic [15:0] noise_offset;
 
     wire [32:0] noise_energy;
     wire [32:0] carrier_threshold;
@@ -71,7 +71,7 @@ module fsk_noise_tracker_tb;
         noise_track_enable = 1'b1;
         carrier_active = 1'b0;
         noise_multiplier_q4_4 = 8'h40;
-        noise_offset = 33'd200;
+        noise_offset = 16'd200;
         errors = 0;
 
         repeat (4) @(negedge clk);
@@ -88,8 +88,8 @@ module fsk_noise_tracker_tb;
             $error("first idle metric did not seed noise estimate");
             errors = errors + 1;
         end
-        if (carrier_threshold != 33'd520) begin
-            $error("threshold got %0d expected 520", carrier_threshold);
+        if (carrier_threshold != 33'd51520) begin
+            $error("threshold got %0d expected 51520", carrier_threshold);
             errors = errors + 1;
         end
 
@@ -135,8 +135,14 @@ module fsk_noise_tracker_tb;
             errors = errors + 1;
         end
 
-        noise_offset = {33{1'b1}};
-        #1;
+        noise_offset = 16'd0;
+        noise_multiplier_q4_4 = 8'hFF;
+        reset_n = 1'b0;
+        metric_valid = 1'b0;
+        repeat (3) @(posedge clk);
+        @(negedge clk);
+        reset_n = 1'b1;
+        send_metric(33'h1FFFFFFFF, 1'b1);
         if (carrier_threshold != {33{1'b1}}) begin
             $error("threshold saturation failed");
             errors = errors + 1;

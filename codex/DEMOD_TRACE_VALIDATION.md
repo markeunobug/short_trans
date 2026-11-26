@@ -53,4 +53,4 @@ The release package includes its required DLLs and data directory, matching rece
 - Actual RS485 throughput, noise robustness, repeated acquisition and capture impact on live reception remain unmeasured.
 - Capture is limited to 512 millisecond-spaced points; a long frame may not fit. Event positions have metric-interval granularity, not FPGA-clock precision.
 - This version does not add continuous overview, raw ADC plotting, automatic threshold optimization or online FSK parameter editing. OOK refers to the main fixed dual-threshold OOK implementation, not arbitrary ASK variants.
-- Preserve known-working firmware. First bench acceptance should check firmware version 0x13, manual capture, each modulation mode, CRC/loss triggers, configuration interruption and normal reception with diagnostics enabled/disabled.
+- Preserve known-working firmware. First bench acceptance should check firmware version 0x14, manual capture, each modulation mode, CRC/loss triggers, configuration interruption and normal reception with diagnostics enabled/disabled.

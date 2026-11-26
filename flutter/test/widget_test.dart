@@ -3,6 +3,44 @@ import 'package:flutter/material.dart';
 import 'package:short_trans_host/main.dart';
 
 void main() {
+  testWidgets(
+    'connection cards fit unresolved status and selected COM at narrow widths',
+    (tester) async {
+      tester.view.physicalSize = const Size(1000, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      for (final width in [280.0, 350.0, 700.0]) {
+        for (final status in ['已连接', '响应未决，请重连']) {
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: Align(
+                  alignment: Alignment.topLeft,
+                  child: SizedBox(
+                    width: width,
+                    child: ConnectionCard(
+                      ports: const ['COM6', 'COM29'],
+                      selectedPort: 'COM29',
+                      connected: status == '已连接',
+                      status: status,
+                      onPortChanged: (_) {},
+                      onToggle: () {},
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull, reason: '$width / $status');
+          expect(find.text(status), findsOneWidget);
+        }
+      }
+    },
+  );
   test('parses RX status fields and readable meanings', () {
     final status = RxDeviceStatus(
       parseFields(
@@ -61,7 +99,31 @@ void main() {
     });
   });
 
-  testWidgets('OOK controls fit a narrow window and require connections', (tester) async {
+  testWidgets('BER workspace fits a narrow window', (tester) async {
+    tester.view.physicalSize = const Size(640, 800);
+    tester.view.devicePixelRatio = 1;
+    await tester.pumpWidget(const ShortTransApp());
+    await tester.tap(find.byTooltip('BER 误码率'));
+    await tester.pumpAndSettle();
+    expect(find.text('FSK 误码率调试'), findsWidgets);
+    expect(find.text('测试包数'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('可对齐 Payload BER'),
+      240,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('可对齐 Payload BER'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+  });
+
+  testWidgets('OOK controls fit a narrow window and require connections', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(640, 800);
     tester.view.devicePixelRatio = 1;
     await tester.pumpWidget(const ShortTransApp());
@@ -69,7 +131,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('下门限（能量值）'), findsOneWidget);
     expect(find.text('上门限（能量值）'), findsOneWidget);
-    final apply = tester.widget<FilledButton>(find.widgetWithText(FilledButton, '应用到 TX / RX'));
+    final apply = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, '应用到 TX / RX'),
+    );
     expect(apply.onPressed, isNull);
     expect(tester.takeException(), isNull);
     addTearDown(() {
