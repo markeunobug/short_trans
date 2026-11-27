@@ -43,7 +43,7 @@ set_global_assignment -name TOP_LEVEL_ENTITY rx_cyclone10
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 22.1STD.0
 set_global_assignment -name PROJECT_CREATION_TIME_DATE "14:50:21  JULY 15, 2026"
 set_global_assignment -name LAST_QUARTUS_VERSION "22.1std.0 Lite Edition"
-set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files_ook_v1
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
 set_global_assignment -name MIN_CORE_JUNCTION_TEMP "-40"
 set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
 set_global_assignment -name ERROR_CHECK_FREQUENCY_DIVISOR 1
@@ -256,6 +256,7 @@ set_global_assignment -name VERILOG_FILE rtl/debug/ber_capture.v
 
 # Passive per-transmit-window stage evidence (BER schema 2)
 set_global_assignment -name VERILOG_FILE rtl/debug/ber_observer.v
+
 
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
 set_global_assignment -name SLD_FILE db/FSK_3_SYMBOLS_auto_stripped.stp

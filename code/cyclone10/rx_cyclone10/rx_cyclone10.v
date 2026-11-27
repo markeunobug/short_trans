@@ -370,6 +370,7 @@ module rx_cyclone10 (
     wire [7:0] fsk_symbol_confidence;
     wire [3:0] fsk_selected_phase;
     wire signed [1:0] fsk_timing_adjust;
+    wire fsk_frame_sync_found, fsk_frame_end;
     // The default 100-symbol guard fits TIME_BASE (16+80) but truncates DATA.
     // V2 DATA64 needs 16 sync + 8*(4 header+3 time+64 payload+2 CRC)=600.
     // Keep a bounded 40-symbol margin; carrier-loss release is unchanged.
@@ -378,6 +379,7 @@ module rx_cyclone10 (
         .clk(clk_sys), .reset_n(rst_fsk_n), .metric_valid(fsk_metric_valid),
         .hard_bit(fsk_hard_bit), .total_energy(total_energy), .confidence(confidence),
         .carrier_present(energy_above_threshold), .preamble_confidence_threshold(confidence_threshold),
+        .frame_sync_found(fsk_frame_sync_found), .frame_end(fsk_frame_end),
         .carrier_active(fsk_carrier_active), .sync_locked(fsk_symbol_locked),
         .preamble_detected(fsk_preamble_detected), .lock_lost(fsk_symbol_lock_lost),
         .search_timeout(fsk_symbol_search_timeout), .bit_valid(fsk_bit_valid),
@@ -514,6 +516,11 @@ module rx_cyclone10 (
     // the committed SPI FIFO because rst_chain_n remains asserted.
     wire parser_lock_lost = symbol_lock_lost || config_apply_pulse ||
                             sweep_start_pulse || sweep_abort_pulse;
+    assign fsk_frame_sync_found = (rx_mode_active == 2'd1) && sync_found;
+    // Empty frames finish at CRC; non-empty frames finish with the last byte.
+    assign fsk_frame_end = (rx_mode_active == 2'd1) &&
+                           (header_error || length_error || crc_error || frame_timeout_error ||
+                            frame_payload_last || (frame_valid && (frame_payload_length == 8'd0)));
     fsk_frame_rx u_frame_rx (
         .debug_state(observer_parser_state), .debug_payload_bytes(observer_payload_bytes),
         .clk(clk_sys),

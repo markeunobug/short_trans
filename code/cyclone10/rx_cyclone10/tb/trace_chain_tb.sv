@@ -31,7 +31,8 @@ module trace_chain_tb;
         .noise_multiplier_q4_4(8'd64),.noise_offset(16'd200),.confidence_threshold(8'd32),.metric_valid(fv),.hard_bit(fh),
         .soft_metric(fs),.total_energy(total),.confidence(confidence),.confidence_ok(fc_ok),.energy_f0(e0),.energy_f1(e1),
         .noise_energy(noise),.carrier_threshold(threshold),.energy_above_threshold(above),.noise_ready(nr),.noise_update(nu));
-    fsk_symbol_sync fss(.clk(clk),.reset_n(reset_n),.metric_valid(fv),.hard_bit(fh),.total_energy(total),.confidence(confidence),
+    fsk_symbol_sync #(.SYNC_TIMEOUT_SYMBOLS(0)) fss(.clk(clk),.reset_n(reset_n),.metric_valid(fv),.hard_bit(fh),.total_energy(total),.confidence(confidence),
+        .frame_sync_found(1'b0),.frame_end(1'b0),
         .carrier_present(above),.preamble_confidence_threshold(8'd32),.carrier_active(fc),.sync_locked(flock),.preamble_detected(fpre),
         .lock_lost(flost),.search_timeout(ftime),.bit_valid(fbv),.bit_value(fb),.symbol_energy(se),.symbol_confidence(sc),.selected_phase(fp),.timing_adjust(fa));
     demod_trace ot(.clk(clk),.reset_n(reset_n),.sample_valid(sv),.metric_valid(ov),.energy0(oe),.energy1(32'd0),.noise(33'd0),

@@ -39,6 +39,7 @@ module sync_fsk_symbol_sync_tb;
         .ENERGY_WIDTH(ENERGY_WIDTH),
         .CONFIDENCE_WIDTH(CONFIDENCE_WIDTH),
         .LOCK_TIMEOUT_SYMBOLS(80),
+        .SYNC_TIMEOUT_SYMBOLS(0),
         .TIMING_HYSTERESIS(8'd4)
     ) dut (
         .clk(clk),
@@ -49,6 +50,8 @@ module sync_fsk_symbol_sync_tb;
         .confidence(confidence),
         .carrier_present(carrier_present),
         .preamble_confidence_threshold(preamble_confidence_threshold),
+        .frame_sync_found(1'b0),
+        .frame_end(1'b0),
         .carrier_active(carrier_active),
         .sync_locked(sync_locked),
         .preamble_detected(preamble_detected),

@@ -52,6 +52,8 @@ module integration_rx_chain_tb;
     wire length_error;
     wire crc_error;
     wire timeout_error;
+    wire frame_end = header_error || length_error || crc_error || timeout_error ||
+                     frame_payload_last || (frame_valid && (frame_payload_length == 8'd0));
 
     reg [8*512-1:0] sample_file;
     reg [8*512-1:0] frame_file;
@@ -109,6 +111,8 @@ module integration_rx_chain_tb;
         .confidence                    (confidence),
         .carrier_present               (energy_above_threshold),
         .preamble_confidence_threshold (8'd140),
+        .frame_sync_found              (sync_found),
+        .frame_end                     (frame_end),
         .carrier_active                (carrier_active),
         .sync_locked                   (sync_locked),
         .preamble_detected             (preamble_detected),
